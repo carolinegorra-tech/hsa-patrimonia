@@ -30,8 +30,6 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 # These two are siblings of this file inside /api on Vercel
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "lib"))
 import deck_builder
 import excel_builder
 
@@ -228,3 +226,64 @@ def build_excel_endpoint(body: BuildBody):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=_safe_filename(data.get("client", ""), "LISTA_ATIVOS", "xlsx"),
     )
+
+
+# ── isolated single-slide exports ────────────────────────────────────────
+# These build the full 6-slide deck then strip everything except the
+# requested slide (5 = patrimonial orgchart, 6 = family orgchart).
+def _build_single_slide(data: dict, keep_idx: int, kind: str) -> Path:
+    from pptx import Presentation
+    tmp_dir = Path(tempfile.mkdtemp(prefix="hsa_"))
+    full_path = tmp_dir / f"_full_{uuid.uuid4().hex}.pptx"
+    out_path  = tmp_dir / f"{uuid.uuid4().hex}.pptx"
+
+    ok = deck_builder.build_deck(data, str(full_path))
+    if not ok or not full_path.exists():
+        raise HTTPException(status_code=500, detail=f"{kind} build failed (full deck step)")
+
+    prs = Presentation(str(full_path))
+    sldIdLst = prs.slides._sldIdLst
+    ids = list(sldIdLst)
+    if keep_idx >= len(ids):
+        raise HTTPException(status_code=500, detail=f"deck has only {len(ids)} slides, cannot keep slide {keep_idx+1}")
+    keep = ids[keep_idx]
+    for sld in ids:
+        if sld is not keep:
+            sldIdLst.remove(sld)
+    prs.save(str(out_path))
+    return out_path
+
+
+@app.post("/api/build/orgchart-patrimonial", dependencies=[Depends(auth)])
+def build_orgchart_patrimonial_endpoint(body: BuildBody):
+    data = body.model_dump()
+    try:
+        out_path = _build_single_slide(data, keep_idx=4, kind="orgchart-patrimonial")
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("build_orgchart_patrimonial failed")
+        raise HTTPException(status_code=500, detail=f"orgchart-patrimonial failed: {e}") from e
+    return FileResponse(
+        out_path,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=_safe_filename(data.get("client", ""), "ORGANOGRAMA_PATRIMONIAL", "pptx"),
+    )
+
+
+@app.post("/api/build/orgchart-familiar", dependencies=[Depends(auth)])
+def build_orgchart_familiar_endpoint(body: BuildBody):
+    data = body.model_dump()
+    try:
+        out_path = _build_single_slide(data, keep_idx=5, kind="orgchart-familiar")
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("build_orgchart_familiar failed")
+        raise HTTPException(status_code=500, detail=f"orgchart-familiar failed: {e}") from e
+    return FileResponse(
+        out_path,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=_safe_filename(data.get("client", ""), "ORGANOGRAMA_FAMILIAR", "pptx"),
+    )
+
