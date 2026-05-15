@@ -237,48 +237,58 @@ function App(){
     finally{setLoading(false);setLoadMsg("");}
   };
 
-  const [downloadStatus, setDownloadStatus] = useState({deck:null, excel:null});
+  const [downloadStatus, setDownloadStatus] = useState({});
+  const [downloadingKind, setDownloadingKind] = useState(null);
 
-  const downloadOne = async (kind) => {
-    const url = kind === "deck" ? "/api/build/deck" : "/api/build/excel";
-    const r = await fetch(url, {
-      method: "POST",
-      headers: {"Content-Type":"application/json", ...authHeaders()},
-      body: JSON.stringify(data),
-    });
-    if (!r.ok) {
-      const t = await r.text();
-      let msg = t; try { msg = JSON.parse(t).detail || t; } catch {}
-      throw new Error(`Falha ao gerar ${kind}: ${String(msg).slice(0,200)}`);
-    }
-    const cd = r.headers.get("content-disposition") || "";
-    const m = /filename="?([^";]+)"?/i.exec(cd);
-    const fname = m ? m[1] : (kind === "deck" ? "patrimonio.pptx" : "lista_ativos.xlsx");
-    const blob = await r.blob();
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = fname;
-    document.body.appendChild(link); link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(link.href);
-    return fname;
+  const KIND_TO_URL = {
+    excel:           "/api/build/excel",
+    deck:            "/api/build/deck",
+    orgPatrimonial:  "/api/build/orgchart-patrimonial",
+    orgFamiliar:     "/api/build/orgchart-familiar",
+  };
+  const KIND_FALLBACK_NAME = {
+    excel:          "lista_ativos.xlsx",
+    deck:           "patrimonio.pptx",
+    orgPatrimonial: "organograma_patrimonial.pptx",
+    orgFamiliar:    "organograma_familiar.pptx",
   };
 
-  const confirm = async () => {
-    setLoading(true); setError(""); setDownloadStatus({deck:null, excel:null});
+  const downloadOne = async (kind) => {
+    setDownloadingKind(kind); setError("");
     try {
-      setLoadMsg("Gerando Excel...");
-      const xlsxName = await downloadOne("excel");
-      setDownloadStatus(s => ({...s, excel: xlsxName}));
-      setLoadMsg("Gerando PowerPoint...");
-      const pptxName = await downloadOne("deck");
-      setDownloadStatus(s => ({...s, deck: pptxName}));
-      setStep("done");
-    } catch(e) {
+      const r = await fetch(KIND_TO_URL[kind], {
+        method: "POST",
+        headers: {"Content-Type":"application/json", ...authHeaders()},
+        body: JSON.stringify(data),
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        let msg = t; try { msg = JSON.parse(t).detail || t; } catch {}
+        throw new Error(`Falha ao gerar ${kind}: ${String(msg).slice(0,240)}`);
+      }
+      const cd = r.headers.get("content-disposition") || "";
+      const m = /filename="?([^";]+)"?/i.exec(cd);
+      const fname = m ? m[1] : KIND_FALLBACK_NAME[kind];
+      const blob = await r.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = fname;
+      document.body.appendChild(link); link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+      setDownloadStatus(s => ({...s, [kind]: fname}));
+      return fname;
+    } catch (e) {
       setError(e.message);
     } finally {
-      setLoading(false); setLoadMsg("");
+      setDownloadingKind(null);
     }
+  };
+
+  const confirm = () => {
+    setError("");
+    setDownloadStatus({});
+    setStep("done");
   };
 
   const updateItem = (grpName, juris, idx, field, value) => {
@@ -456,27 +466,63 @@ function App(){
   if(step==="done")return(
     <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Nunito Sans',sans-serif",color:C.text,display:"flex",alignItems:"center",justifyContent:"center",padding:"32px 20px"}} className="fi">
       <style>{style}</style>
-      <div style={{width:"100%",maxWidth:600,textAlign:"center"}}>
-        <div style={{fontSize:48,marginBottom:12}}>✅</div>
-        <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:600,color:C.text,marginBottom:8}}>Arquivos gerados</h2>
+      <div style={{width:"100%",maxWidth:720,textAlign:"center"}}>
+        <div style={{fontSize:48,marginBottom:12}}>📥</div>
+        <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:30,fontWeight:600,color:C.text,marginBottom:8}}>Arquivos disponíveis</h2>
         <p style={{color:C.muted,fontSize:13,lineHeight:1.7,marginBottom:24}}>
-          Os dois arquivos foram baixados pelo navegador.<br/>
-          Se o download não iniciou, clique abaixo para baixar de novo.
+          Clique em cada arquivo para baixar. Você pode baixar quantas vezes precisar.
         </p>
 
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:24}}>
-          <button className="bg" onClick={()=>downloadOne("excel").catch(e=>setError(e.message))}
-            style={{background:C.card,color:C.text,padding:"18px 14px",borderRadius:10,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13,fontWeight:600,textAlign:"center"}}>
-            <div style={{fontSize:28,marginBottom:8}}>📊</div>
-            <div style={{color:C.text,marginBottom:3}}>Lista de Ativos</div>
-            <div style={{color:C.muted,fontSize:10,fontWeight:400}}>{downloadStatus.excel||"Excel (.xlsx)"}</div>
-          </button>
-          <button className="bg" onClick={()=>downloadOne("deck").catch(e=>setError(e.message))}
-            style={{background:C.card,color:C.text,padding:"18px 14px",borderRadius:10,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13,fontWeight:600,textAlign:"center"}}>
-            <div style={{fontSize:28,marginBottom:8}}>🖼️</div>
-            <div style={{color:C.text,marginBottom:3}}>Relatório PPT</div>
-            <div style={{color:C.muted,fontSize:10,fontWeight:400}}>{downloadStatus.deck||"PowerPoint (.pptx)"}</div>
-          </button>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:24}}>
+          {[
+            {kind:"excel",          icon:"📊", title:"Lista de Ativos",          sub:"Excel completo (.xlsx)"},
+            {kind:"deck",           icon:"📑", title:"Apresentação PPT",         sub:"6 slides — capa, composição, detalhamento, organogramas"},
+            {kind:"orgPatrimonial", icon:"🏛️", title:"Organograma Patrimonial",  sub:"Slide isolado (.pptx)"},
+            {kind:"orgFamiliar",    icon:"👨‍👩‍👧‍👦", title:"Organograma Familiar",     sub:"Slide isolado (.pptx)"},
+          ].map(({kind,icon,title,sub}) => {
+            const isDownloading = downloadingKind === kind;
+            const wasDownloaded = !!downloadStatus[kind];
+            return (
+              <button key={kind} className="bg"
+                disabled={isDownloading}
+                onClick={()=>downloadOne(kind)}
+                style={{
+                  background: wasDownloaded ? "rgba(60,174,122,.06)" : C.card,
+                  color: C.text,
+                  padding: "22px 18px",
+                  borderRadius: 12,
+                  border: `1.5px solid ${wasDownloaded ? C.green : C.border}`,
+                  cursor: isDownloading ? "wait" : "pointer",
+                  fontFamily: "'Nunito Sans',sans-serif",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  textAlign: "left",
+                  minHeight: 140,
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                  opacity: isDownloading ? 0.6 : 1,
+                }}>
+                <div>
+                  <div style={{fontSize:28,marginBottom:10}}>{icon}</div>
+                  <div style={{color:C.text,marginBottom:4,fontSize:14}}>{title}</div>
+                  <div style={{color:C.muted,fontSize:11,fontWeight:400,lineHeight:1.5}}>{sub}</div>
+                </div>
+                <div style={{marginTop:10,fontSize:11,fontWeight:700,letterSpacing:"0.05em"}}>
+                  {isDownloading ? (
+                    <span style={{color:C.gold}}>
+                      <span style={{display:"inline-block",width:10,height:10,border:"2px solid rgba(191,148,71,.3)",borderTopColor:C.gold,borderRadius:"50%",animation:"spin .8s linear infinite",marginRight:6,verticalAlign:"middle"}}/>
+                      Gerando...
+                    </span>
+                  ) : wasDownloaded ? (
+                    <span style={{color:C.green}}>✓ Baixado</span>
+                  ) : (
+                    <span style={{color:C.gold}}>↓ Baixar</span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
         </div>
 
         <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 20px",marginBottom:20,textAlign:"left"}}>
@@ -488,9 +534,12 @@ function App(){
           </p>
         </div>
 
-        {error&&<div style={{background:"rgba(224,82,82,.1)",border:`1px solid ${C.red}`,borderRadius:8,padding:"10px 14px",color:C.red,fontSize:12,marginBottom:16}}>⚠ {error}</div>}
+        {error&&<div style={{background:"rgba(224,82,82,.1)",border:`1px solid ${C.red}`,borderRadius:8,padding:"10px 14px",color:C.red,fontSize:12,marginBottom:16,textAlign:"left"}}>⚠ {error}</div>}
 
-        <button className="gh" style={{background:"transparent",color:C.muted,padding:"11px 24px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>{setStep("upload");setData(null);setFiles({dirpf:null,dcbe:null});setError("");setDownloadStatus({deck:null,excel:null});}}>← Novo Cliente</button>
+        <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+          <button className="gh" style={{background:"transparent",color:C.muted,padding:"11px 24px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>setStep("verify")}>← Voltar para verificação</button>
+          <button className="gh" style={{background:"transparent",color:C.muted,padding:"11px 24px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>{setStep("upload");setData(null);setFiles({dirpf:null,dcbe:null});setError("");setDownloadStatus({});}}>Novo Cliente</button>
+        </div>
       </div>
     </div>
   );
