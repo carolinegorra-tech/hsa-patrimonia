@@ -30,8 +30,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 # These two are siblings of this file inside /api on Vercel
-import deck_builder
-import excel_builder
+from lib import deck_builder
+from lib import excel_builder
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 HSA_PASSWORD      = os.environ.get("HSA_PASSWORD", "")
