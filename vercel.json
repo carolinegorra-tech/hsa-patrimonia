@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "functions": {
+    "api/index.py": {
+      "memory": 1024,
+      "maxDuration": 300
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index" },
+    { "source": "/(.*\\.jsx)", "destination": "/$1" },
+    { "source": "/", "destination": "/index.html" }
+  ]
+}
