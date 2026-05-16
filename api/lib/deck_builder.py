@@ -20930,7 +20930,19 @@ def build_deck(data, output_path):
         bar = next(sh.chart for sh in s3.shapes if sh.has_chart)
         cd2 = CategoryChartData(); cd2.categories = cats; cd2.add_series('', vals)
         bar.replace_data(cd2)
-        recolor_chart(bar, ['283944'])           # all bars navy
+        # Blue gradient palette — DARKEST for the largest bar, LIGHTEST for the
+        # smallest. cats come from br_sorted which is DESCENDING (largest at
+        # index 0, smallest at the end). So i=0 → DARK, i=n-1 → LIGHT.
+        n = len(cats)
+        BLUE_DARK  = (32, 60, 92)     # ~ #203c5c — biggest bar
+        BLUE_LIGHT = (158, 188, 222)  # ~ #9ebcde — smallest bar
+        def _lerp(a, b, t): return int(round(a + (b - a) * t))
+        def _hex(rgb): return '{:02X}{:02X}{:02X}'.format(*rgb)
+        gradient = []
+        for i in range(n):
+            t = i / max(1, n - 1)   # largest (i=0) → t=0 → DARK; smallest → t=1 → LIGHT
+            gradient.append(_hex(tuple(_lerp(BLUE_DARK[k], BLUE_LIGHT[k], t) for k in range(3))))
+        recolor_chart(bar, gradient)
         # FIX #6: bigger axis category labels (the names beside each bar)
         try:
             bar.category_axis.tick_labels.font.size = Pt(11)
@@ -21168,4 +21180,3 @@ if __name__ == '__main__':
     BFM = json.loads(r'''{"client":"BEATRIZ FERREIRA MONTEIRO","cpf":"987.654.321-00","year":2024,"spouse":{"name":"RODRIGO ANDRADE MONTEIRO","cpf":"123.456.789-00","marriage_regime":"Comunhão Parcial de Bens","marriage_date":"12/06/2005","certificate_registry":"3o Cartório de Registro Civil de São Paulo/SP"},"dependents":[{"name":"LUCAS ANDRADE MONTEIRO","cpf":"000.111.222-33","birth_date":"20/08/2008","relationship":"Filho(a)"},{"name":"SOFIA ANDRADE MONTEIRO","cpf":"000.333.444-55","birth_date":"03/02/2012","relationship":"Filho(a)"}],"groups":[{"name":"Bens Imóveis","jurisdiction":"Brasil","items":[{"id":1,"desc":"Total Grupo 01","loc":"SP","dirpf":5150000,"dcbe":null}]},{"name":"Bens Móveis / Veículos / Arte","jurisdiction":"Brasil","items":[{"id":2,"desc":"Total Grupo 02","loc":"SP","dirpf":1310000,"dcbe":null}]},{"name":"Participações Societárias","jurisdiction":"Brasil","items":[{"id":3,"desc":"Total Grupo 03","loc":"Brasil","dirpf":29250000,"dcbe":null}]},{"name":"Aplicações e Investimentos","jurisdiction":"Brasil","items":[{"id":4,"desc":"Total Grupo 04","loc":"Brasil","dirpf":5920000,"dcbe":null}]},{"name":"Contas Bancárias","jurisdiction":"Brasil","items":[{"id":5,"desc":"Total Grupo 06","loc":"Brasil","dirpf":99300,"dcbe":null}]},{"name":"Participações Societárias no Exterior","jurisdiction":"Offshore","items":[{"id":6,"desc":"BFM INTERNATIONAL LTD.","loc":"Ilhas Cayman","dirpf":null,"dcbe":3250000},{"id":7,"desc":"MONTEIRO HOLDINGS LLC","loc":"Delaware, EUA","dirpf":null,"dcbe":1880000}]},{"name":"Contas Bancárias no Exterior","jurisdiction":"Offshore","items":[{"id":8,"desc":"Bank of America N.A.","loc":"EUA","dirpf":null,"dcbe":397400},{"id":10,"desc":"Banco Santander España","loc":"Espanha","dirpf":null,"dcbe":202585}]}],"debts":[{"id":1,"desc":"Financiamento","value":1095000}]}''')
     ok = build_deck(BFM, '/home/claude/BFM_2024_PATRIMON_IA.pptx')
     print("✓ Build OK" if ok else "✗ Build FAILED")
-
