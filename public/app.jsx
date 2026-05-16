@@ -310,6 +310,27 @@ function App(){
   const brGrps=data?.groups?.filter(g=>g.jurisdiction==="Brasil")||[];
   const offGrps=data?.groups?.filter(g=>g.jurisdiction==="Offshore")||[];
 
+  // Tab state for verify-screen filtering. Default to "Brasil" if it has
+  // groups, otherwise "Offshore". "Todos" picked for each category to show
+  // all assets in that jurisdiction.
+  const [activeJuris, setActiveJuris] = useState("Brasil");
+  const [activeCat, setActiveCat] = useState("Todos");
+  // Reset category when jurisdiction changes so we don't end up showing
+  // a category that doesn't exist in the new jurisdiction.
+  useEffect(()=>{ setActiveCat("Todos"); }, [activeJuris]);
+  // When data first loads, prefer the jurisdiction that actually has groups.
+  useEffect(()=>{
+    if (!data) return;
+    if (brGrps.length === 0 && offGrps.length > 0) setActiveJuris("Offshore");
+    else setActiveJuris("Brasil");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
+  const activeGrps = activeJuris === "Brasil" ? brGrps : offGrps;
+  const visibleGrps = activeCat === "Todos"
+    ? activeGrps
+    : activeGrps.filter(g => g.name === activeCat);
+
   if(step==="upload")return(
     <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Nunito Sans',sans-serif",color:C.text,display:"flex",alignItems:"center",justifyContent:"center",padding:"32px 20px"}}>
       <style>{style}</style>
@@ -390,26 +411,82 @@ function App(){
             )}
           </div>
         )}
-        {brGrps.length>0&&(
+        {/* Jurisdiction tabs (Brasil / Offshore) */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+          {[
+            {key:"Brasil",   label:"🇧🇷 Brasil",   accent:C.green, total:brl(brGrps.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dirpf||0),0),0)), n:brGrps.length, items:brGrps.reduce((a,g)=>a+g.items.length,0)},
+            {key:"Offshore", label:"🌐 Offshore", accent:C.gold,  total:(()=>{const t=offGrps.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dcbe||0),0),0); return t>0?usd(t):"N/A";})(), n:offGrps.length, items:offGrps.reduce((a,g)=>a+g.items.length,0)},
+          ].map(({key,label,accent,total,n,items}) => {
+            const isActive = activeJuris === key;
+            const disabled = n === 0;
+            return (
+              <button key={key}
+                disabled={disabled}
+                onClick={()=>!disabled && setActiveJuris(key)}
+                style={{
+                  background: isActive ? "rgba(60,174,122,.06)" : C.card,
+                  border: `1.5px solid ${isActive ? accent : C.border}`,
+                  borderRadius: 10,
+                  padding: "14px 18px",
+                  cursor: disabled ? "not-allowed" : "pointer",
+                  textAlign: "left",
+                  fontFamily: "'Nunito Sans',sans-serif",
+                  opacity: disabled ? 0.4 : 1,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 12,
+                }}>
+                <div>
+                  <p style={{color:isActive?accent:C.text,fontSize:14,fontWeight:700,marginBottom:3}}>{label}</p>
+                  <p style={{color:C.muted,fontSize:10}}>{n} categorias · {items} itens</p>
+                </div>
+                <p style={{color:isActive?accent:C.text,fontSize:14,fontFamily:"'Cormorant Garamond',serif",fontWeight:600,whiteSpace:"nowrap"}}>{total}</p>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Category sub-tabs (filtered by active jurisdiction) */}
+        {activeGrps.length > 0 && (
+          <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:14}}>
+            {["Todos", ...activeGrps.map(g=>g.name)].map(catName => {
+              const isActive = activeCat === catName;
+              const count = catName === "Todos"
+                ? activeGrps.reduce((a,g)=>a+g.items.length,0)
+                : (activeGrps.find(g=>g.name===catName)?.items.length || 0);
+              return (
+                <button key={catName}
+                  onClick={()=>setActiveCat(catName)}
+                  style={{
+                    background: isActive ? C.text : C.card,
+                    color: isActive ? C.bg : C.text,
+                    border: `1px solid ${isActive ? C.text : C.border}`,
+                    borderRadius: 999,
+                    padding: "7px 14px",
+                    cursor: "pointer",
+                    fontFamily: "'Nunito Sans',sans-serif",
+                    fontSize: 12,
+                    fontWeight: isActive ? 700 : 500,
+                  }}>
+                  {catName} <span style={{opacity:0.55,marginLeft:4,fontSize:10}}>{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Filtered groups */}
+        {visibleGrps.length === 0 ? (
+          <div style={{background:C.card,border:`1px dashed ${C.border}`,borderRadius:10,padding:"40px 20px",textAlign:"center",color:C.muted,fontSize:13,marginBottom:20}}>
+            Nenhum ativo em {activeJuris}{activeCat !== "Todos" ? ` · ${activeCat}` : ""}.
+          </div>
+        ) : (
           <div style={{marginBottom:20}}>
-            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
-              <div style={{width:3,height:14,background:C.green,borderRadius:2}}/>
-              <span style={{color:C.green,fontWeight:700,fontSize:11,letterSpacing:"0.15em"}}>BRASIL</span>
-              <span style={{color:C.muted,fontSize:11}}>{brl(brGrps.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dirpf||0),0),0))}</span>
-            </div>
-            {brGrps.map(g=><GroupTable key={g.name+g.jurisdiction} group={g} onUpdate={updateItem}/>)}
+            {visibleGrps.map(g=><GroupTable key={g.name+g.jurisdiction} group={g} onUpdate={updateItem}/>)}
           </div>
         )}
-        {offGrps.length>0&&(
-          <div style={{marginBottom:24}}>
-            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
-              <div style={{width:3,height:14,background:C.gold,borderRadius:2}}/>
-              <span style={{color:C.gold,fontWeight:700,fontSize:11,letterSpacing:"0.15em"}}>OFFSHORE</span>
-              <span style={{color:C.muted,fontSize:11}}>{brl(offGrps.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dirpf||0),0),0))}</span>
-            </div>
-            {offGrps.map(g=><GroupTable key={g.name+g.jurisdiction} group={g} onUpdate={updateItem}/>)}
-          </div>
-        )}
+
         <div style={{background:C.card,border:`1px solid ${C.borderLight}`,borderRadius:10,padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
           <span style={{fontWeight:700,fontSize:13,color:C.muted,letterSpacing:"0.1em"}}>TOTAL GERAL</span>
           <div style={{display:"flex",gap:24,alignItems:"center"}}>
