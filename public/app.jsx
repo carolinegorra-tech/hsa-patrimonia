@@ -476,9 +476,9 @@ function App(){
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:24}}>
           {[
             {kind:"excel",          icon:"📊", title:"Lista de Ativos",          sub:"Excel completo (.xlsx)"},
-            {kind:"deck",           icon:"📑", title:"Apresentação PPT",         sub:"6 slides — capa, composição, detalhamento, organogramas"},
             {kind:"orgPatrimonial", icon:"🏛️", title:"Organograma Patrimonial",  sub:"Slide isolado (.pptx)"},
             {kind:"orgFamiliar",    icon:"👨‍👩‍👧‍👦", title:"Organograma Familiar",     sub:"Slide isolado (.pptx)"},
+            {kind:"deck",           icon:"📑", title:"Apresentação PPT",         sub:"6 slides — capa, composição, detalhamento, organogramas"},
           ].map(({kind,icon,title,sub}) => {
             const isDownloading = downloadingKind === kind;
             const wasDownloaded = !!downloadStatus[kind];
@@ -549,3 +549,4 @@ function App(){
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<App />);
+
