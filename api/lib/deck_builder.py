@@ -20838,16 +20838,18 @@ def build_deck(data, output_path):
                 for run in para.runs:
                     run.font.size = Pt(12)
 
-    # TOTAL bar: sits just below the last row. Made taller so table bottom
-    # aligns with the extended pie chart bottom (see FIX #8).
+    # TOTAL bar: thinner now (was 876_000 EMU, looked too thick). We compensate
+    # by adding a bigger gap above it so the table's overall bottom (and the
+    # pie's bottom) stays at the same y as before — keeping pie ↔ table aligned.
     total_rect = by_name.get(TOTAL_RECT)
     if total_rect is not None:
-        new_total_top = FIRST_TOP + 5*STRIDE + NEW_ROW_H + 70_000
-        NEW_TOTAL_H = 876_000           # was 566_928 — taller to match pie extent
+        NEW_TOTAL_H   = 500_000          # was 876_000 — slimmer
+        EXTRA_GAP     = 446_000          # absorb the height we removed (876-500+70=446)
+        new_total_top = FIRST_TOP + 5*STRIDE + NEW_ROW_H + EXTRA_GAP
         total_rect.top = Emu(new_total_top)
         total_rect.height = Emu(NEW_TOTAL_H)
         total_h = NEW_TOTAL_H
-        # move the TOTAL GERAL label + value to the new bar's vertical centre
+        # centre the TOTAL GERAL label + value vertically inside the slimmer bar
         bar_mid = new_total_top + total_h//2
         tb479 = by_name.get('TextBox 479')   # "TOTAL GERAL"
         tb480 = by_name.get('TextBox 480')   # value
@@ -20857,7 +20859,7 @@ def build_deck(data, output_path):
             tb480.top = Emu(bar_mid - 210_000)
 
         # FIX #8: align the pie chart vertically with the value table —
-        # same top, same bottom, balanced side-by-side proportions.
+        # same top, same bottom. Bottom is the bottom of the TOTAL bar.
         TABLE_TOP    = FIRST_TOP
         TABLE_BOTTOM = new_total_top + total_h
         for sh in s2.shapes:
