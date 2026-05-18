@@ -19856,7 +19856,7 @@ REF_TEMPLATE = _ensure_template()
 
 # ── Palette ───────────────────────────────────────────────────────────────────
 NAVY     = RGBColor(0x28,0x39,0x44)
-LIME     = RGBColor(0xD4,0xE1,0x42)
+LIME     = RGBColor(0xE4,0xE5,0x1F)
 GRAY_MED = RGBColor(0x8E,0x95,0x9B)
 GRAY_LT  = RGBColor(0xBE,0xC2,0xC6)
 WHITE    = RGBColor(0xFF,0xFF,0xFF)
