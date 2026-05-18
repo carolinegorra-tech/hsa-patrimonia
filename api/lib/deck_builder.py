@@ -20760,6 +20760,21 @@ def build_deck(data, output_path):
     ]
     by_name = {sh.name: sh for sh in s2.shapes}
 
+    # Hide empty slots (val == 0) — make the rect background transparent and
+    # set all text to white so nothing shows. Keeps geometry intact.
+    for i, rect_name in enumerate(ROW_RECTS):
+        if slots[i]['val'] == 0:
+            rect = by_name.get(rect_name)
+            if rect is not None:
+                rect.fill.background()
+                rect.line.fill.background()
+            for tb_name in ROW_TBOXES[i]:
+                tb = by_name.get(tb_name)
+                if tb is not None:
+                    for para in tb.text_frame.paragraphs:
+                        for run in para.runs:
+                            run.font.color.rgb = WHITE
+
     # FIX #5: rebalance slide 2 layout — pie was left-skewed and value table
     # was off-centre on the right half. Shift both toward slide centre.
     # Constraint: TextBox 480 (TOTAL value) right edge must stay within
