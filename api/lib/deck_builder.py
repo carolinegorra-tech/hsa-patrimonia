@@ -20632,7 +20632,20 @@ def build_deck(data, output_path):
 
     prs = Presentation(output_path)
 
-    # ── helper: text replace ─────────────────────────────────────────────────
+    # ── Fix slide number style on all slides (TextBox 13) ────────────────────
+    # Template has it bold + inherited color. We want: Gotham SSm Black, NOT
+    # bold, grey (#8E959B), 9pt — matching the reference screenshot.
+    for sl in prs.slides:
+        for sh in sl.shapes:
+            if sh.name == 'TextBox 13' and hasattr(sh, 'text_frame'):
+                for para in sh.text_frame.paragraphs:
+                    for run in para.runs:
+                        run.font.name  = 'Gotham SSm Black'
+                        run.font.bold  = False
+                        run.font.size  = Pt(11.7)
+                        run.font.color.rgb = GRAY_MED
+                break
+
     def rep(slide, old, new):
         for sh in slide.shapes:
             if hasattr(sh,'text_frame') and old in sh.text:
