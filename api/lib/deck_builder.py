@@ -20893,6 +20893,27 @@ def build_deck(data, output_path):
         rep(s3, CG_PCTS[cg_idx], slots[cg_idx]['pct_str'])
     rep(s3, 'R$ 50.3M', BR_TOTAL_STR)
 
+    # Hide KPI cards on slide 3 for empty slots (val == 0) —
+    # The 6 KPI rectangles in the template are named 'Rectangle 484..489'
+    # (or similar). We find them by matching the category label text we just
+    # wrote and make them invisible, same technique as slide 2.
+    # Instead of guessing rect names, find ALL textboxes on s3 that contain
+    # the placeholder "—" (which we wrote for empty slots) and hide the
+    # rectangle that overlaps them.
+    s3_by_name = {sh.name: sh for sh in s3.shapes}
+    for cg_idx in range(6):
+        if slots[cg_idx]['val'] == 0:
+            # Make label, value and pct text white (invisible on white background)
+            for placeholder in (CG_LBL_TITLE[cg_idx], CG_VALS[cg_idx], CG_PCTS[cg_idx]):
+                for sh in s3.shapes:
+                    if hasattr(sh, 'text') and sh.text.strip() in ('—', placeholder, slots[cg_idx]['val_str']):
+                        try:
+                            for para in sh.text_frame.paragraphs:
+                                for run in para.runs:
+                                    run.font.color.rgb = WHITE
+                        except Exception:
+                            pass
+
     # ── Slide 4: participações ───────────────────────────────────────────────
     s4 = prs.slides[3]
     kill_ghost_text7(s4)   # remove leftover small "BRASIL" Calibri ghost label
@@ -20962,9 +20983,9 @@ def build_deck(data, output_path):
         recolor_chart(bar, gradient)
         # FIX #6: bigger axis category labels (the names beside each bar)
         try:
-            bar.category_axis.tick_labels.font.size = Pt(11)
-            bar.category_axis.tick_labels.font.bold = True
-            bar.category_axis.tick_labels.font.name = 'Gotham SSm Bold'
+            bar.category_axis.tick_labels.font.size = Pt(12)
+            bar.category_axis.tick_labels.font.bold = False
+            bar.category_axis.tick_labels.font.name = 'Gotham SSm Black'
         except Exception: pass
 
     # Slide 4 charts
@@ -20990,9 +21011,9 @@ def build_deck(data, output_path):
         # FIX #6 (cont'd): bigger axis category labels on both s4 charts
         for ch in (br_chart, off_chart):
             try:
-                ch.category_axis.tick_labels.font.size = Pt(11)
-                ch.category_axis.tick_labels.font.bold = True
-                ch.category_axis.tick_labels.font.name = 'Gotham SSm Bold'
+                ch.category_axis.tick_labels.font.size = Pt(12)
+                ch.category_axis.tick_labels.font.bold = False
+                ch.category_axis.tick_labels.font.name = 'Gotham SSm Black'
             except Exception: pass
 
     # ── Slide 5: organograma patrimonial ─────────────────────────────────────
