@@ -21037,11 +21037,13 @@ def build_deck(data, output_path):
 
     # FIX #4: Brazil flag as the national-assets hub node
     brazil_flag(s5, CX5, FLAG_CY, w=300_000)
-    T(s5, "ATIVOS NO BRASIL", CX5-1_500_000, FLAG_CY+115_000, 3_000_000, fh(7),
+    # Label below flag — push down enough that the connector line doesn't cross it
+    LABEL_Y = FLAG_CY + 145_000
+    T(s5, "ATIVOS NO BRASIL", CX5-1_500_000, LABEL_Y, 3_000_000, fh(7),
       pt=7, bold=True, col=GRAY_MED, align='center', font='Gotham SSm Bold')
 
     # horizontal distributor — snug below the flag label
-    HDIST_Y = FLAG_CY + 115_000 + fh(7) + 45_000
+    HDIST_Y = LABEL_Y + fh(7) + 45_000
     L(s5, CX5, FLAG_CY+90_000, CX5, HDIST_Y)
 
     # BR boxes — taller, generous internal spacing (no overlap)
@@ -21074,7 +21076,7 @@ def build_deck(data, output_path):
         OBY = BRT+BH+150_000
         OBX = CX5-1_350_000
         R(s5, OBX, OBY, 2_700_000, 360_000, fill=NAVY)
-        T(s5,"OFFSHORE",OBX+100_000,OBY+85_000,2_500_000,fh(13),
+        T(s5,"OFFSHORE",OBX,OBY,2_700_000,360_000,
           pt=13,bold=True,col=WHITE,align='center',font='Gotham SSm Bold')
         L(s5, CX5, BRT+BH, CX5, OBY)
         OFL = OBY+360_000
