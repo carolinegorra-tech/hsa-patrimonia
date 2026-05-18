@@ -20260,14 +20260,14 @@ def _outline(sh, col, lw=1.4):
     sh.line.width = Pt(lw)
 
 def Person(sl, cx, cy, sz=300_000, col=None, gender=None):
-    """Clean person icon: solid circle head + body silhouette, drawn as solid
+    """Clean person icon: circle head + body silhouette, drawn as solid
     shapes. cx,cy is the icon's centre.
 
     gender:
-      'F' → female: round head + clear triangular DRESS that flares wide
-            at the hem. Classic restroom-sign woman.
-      'M' or None → male: round head + TRAPEZOIDAL bust with wide flat
-            shoulders narrowing slightly toward the waist. Suit-jacket feel.
+      'F' → classic female pictogram: round head + a triangular 'dress'
+            body that flares wide at the hem (the universal restroom-sign
+            woman). Instantly distinguishable from the male icon.
+      'M' or None → round head + straight-shouldered bust silhouette.
 
     Both styles use the same head size and overall footprint so they sit
     consistently in the org-chart boxes.
@@ -20285,37 +20285,51 @@ def Person(sl, cx, cy, sz=300_000, col=None, gender=None):
         sh.line.color.rgb = c; sh.line.width = Pt(0.5)
         return sh
 
-    # Head — same for both genders, slightly bigger than before for visibility
-    head_d = int(sz * 0.50)
-    head_x = cx - head_d // 2
-    head_y = top
-    head = sl.shapes.add_shape(MSO_SHAPE.OVAL,
-        Emu(head_x), Emu(head_y), Emu(head_d), Emu(head_d))
-    head.fill.solid(); head.fill.fore_color.rgb = c
-    head.line.color.rgb = c; head.line.width = Pt(0.5)
-
-    # Small gap below head (neck space)
-    body_top = head_y + head_d + int(sz * 0.03)
-
     if gender == 'F':
-        # ── female: triangular DRESS, narrow shoulders → wide hem ────────────
-        shoulder_half = int(sz * 0.17)
-        hem_half      = int(sz * 0.46)
+        # ── female: round head + triangular dress ────────────────────────
+        head_d = int(sz * 0.44)
+        head_x = cx - head_d // 2
+        head_y = top
+        head = sl.shapes.add_shape(MSO_SHAPE.OVAL,
+            Emu(head_x), Emu(head_y), Emu(head_d), Emu(head_d))
+        head.fill.solid(); head.fill.fore_color.rgb = c
+        head.line.color.rgb = c; head.line.width = Pt(0.5)
+
+        # dress: narrow at the shoulders, flaring out to a wide hem
+        body_top  = head_y + head_d + int(sz * 0.04)
+        neck_half = int(sz * 0.13)
+        hem_half  = int(sz * 0.42)
         _freeform([
-            (cx - shoulder_half, body_top),    # left shoulder
-            (cx + shoulder_half, body_top),    # right shoulder
-            (cx + hem_half,      bottom),      # hem right (flared out)
-            (cx - hem_half,      bottom),      # hem left
+            (cx - neck_half, body_top),       # left shoulder
+            (cx + neck_half, body_top),       # right shoulder
+            (cx + hem_half,  bottom),         # hem right
+            (cx - hem_half,  bottom),         # hem left
         ])
     else:
-        # ── male: TRAPEZOIDAL bust, wide shoulders → narrower waist ──────────
-        shoulder_half = int(sz * 0.44)         # wide flat shoulders
-        waist_half    = int(sz * 0.34)         # narrower at the bottom
+        # ── male: round head + straight-shouldered bust ──────────────────
+        head_d = int(sz * 0.46)
+        head_x = cx - head_d // 2
+        head_y = top
+        head = sl.shapes.add_shape(MSO_SHAPE.OVAL,
+            Emu(head_x), Emu(head_y), Emu(head_d), Emu(head_d))
+        head.fill.solid(); head.fill.fore_color.rgb = c
+        head.line.color.rgb = c; head.line.width = Pt(0.5)
+
+        bust_top  = head_y + head_d + int(sz * 0.04)
+        half      = int(sz * 0.49)
+        neck_half = int(sz * 0.16)
         _freeform([
-            (cx - shoulder_half, body_top),    # left shoulder
-            (cx + shoulder_half, body_top),    # right shoulder
-            (cx + waist_half,    bottom),      # bottom right
-            (cx - waist_half,    bottom),      # bottom left
+            (cx - neck_half,            bust_top),
+            (cx + int(neck_half*0.4),   bust_top - int(sz*0.005)),
+            (cx + int(half*0.55),       bust_top + int(sz*0.10)),
+            (cx + half - int(sz*0.02),  bust_top + int(sz*0.26)),
+            (cx + half,                 bust_top + int(sz*0.42)),
+            (cx + half,                 bottom),
+            (cx - half,                 bottom),
+            (cx - half,                 bust_top + int(sz*0.42)),
+            (cx - half + int(sz*0.02),  bust_top + int(sz*0.26)),
+            (cx - int(half*0.55),       bust_top + int(sz*0.10)),
+            (cx - int(neck_half*0.4),   bust_top - int(sz*0.005)),
         ])
 
 def guess_gender(name):
