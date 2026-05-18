@@ -315,6 +315,46 @@ function App(){
   // all assets in that jurisdiction.
   const [activeJuris, setActiveJuris] = useState("Brasil");
   const [activeCat, setActiveCat] = useState("Todos");
+
+  // PTAX state — exchange rate USD→BRL fetched from Banco Central (BCB).
+  // Default date is 31/12/yyyy of the AC (calendar year) of the documents.
+  const defaultPtaxDate = data?.year ? `31/12/${data.year}` : "31/12/2024";
+  const [ptaxDate, setPtaxDate] = useState(defaultPtaxDate);
+  const [ptaxRate, setPtaxRate] = useState(null);
+  const [ptaxLoading, setPtaxLoading] = useState(false);
+  const [ptaxError, setPtaxError] = useState("");
+
+  const fetchPtax = async () => {
+    setPtaxLoading(true); setPtaxError(""); setPtaxRate(null);
+    // Parse dd/mm/yyyy → mm-dd-yyyy as required by BCB API
+    const m = ptaxDate.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) { setPtaxError("Use o formato dd/mm/aaaa"); setPtaxLoading(false); return; }
+    const [, dd, mm, yyyy] = m;
+    const apiDate = `${mm}-${dd}-${yyyy}`;
+    // BCB Olinda dataset: PTAX USD venda. We try the requested date, then walk
+    // back up to 7 days if the market was closed that day (weekend/holiday).
+    let triedDates = [];
+    for (let i = 0; i < 8; i++) {
+      const d = new Date(parseInt(yyyy), parseInt(mm)-1, parseInt(dd) - i);
+      const formatted = `${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}-${d.getFullYear()}`;
+      triedDates.push(formatted);
+      const url = `https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/CotacaoDolarDia(dataCotacao=@dataCotacao)?@dataCotacao=%27${formatted}%27&%24format=json&%24select=cotacaoVenda,dataHoraCotacao`;
+      try {
+        const r = await fetch(url);
+        if (r.ok) {
+          const j = await r.json();
+          if (j?.value?.length > 0) {
+            setPtaxRate(j.value[0].cotacaoVenda);
+            setPtaxLoading(false);
+            return;
+          }
+        }
+      } catch (e) { /* try next date */ }
+    }
+    setPtaxError(`Cotação não encontrada para ${ptaxDate} (mercado fechado?). Tentou ${triedDates.length} dias.`);
+    setPtaxLoading(false);
+  };
+
   // Reset category when jurisdiction changes so we don't end up showing
   // a category that doesn't exist in the new jurisdiction.
   useEffect(()=>{ setActiveCat("Todos"); }, [activeJuris]);
@@ -389,6 +429,42 @@ function App(){
             </div>
           ))}
         </div>
+
+        {/* PTAX row — only when client has offshore assets */}
+        {offGrps.length > 0 && (() => {
+          const totOff = offGrps.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dcbe||0),0),0);
+          const offBrl = ptaxRate ? totOff * ptaxRate : null;
+          return (
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"14px 16px",marginBottom:16,display:"grid",gridTemplateColumns:"auto auto auto 1fr",gap:14,alignItems:"center"}}>
+              <div>
+                <p style={{color:C.muted,fontSize:9,fontWeight:700,letterSpacing:"0.15em",marginBottom:4}}>PTAX BCB (USD/BRL)</p>
+                <p style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:600,color:ptaxRate?C.gold:C.muted}}>
+                  {ptaxRate ? `R$ ${ptaxRate.toFixed(4)}` : "—"}
+                </p>
+              </div>
+              <input
+                value={ptaxDate}
+                onChange={e=>setPtaxDate(e.target.value)}
+                placeholder="dd/mm/aaaa"
+                style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,padding:"8px 10px",color:C.text,fontSize:12,fontFamily:"'Nunito Sans',sans-serif",width:110}}
+              />
+              <button onClick={fetchPtax} disabled={ptaxLoading}
+                style={{background:"transparent",color:C.gold,border:`1px solid ${C.gold}`,borderRadius:6,padding:"8px 14px",cursor:ptaxLoading?"wait":"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:11,fontWeight:700,letterSpacing:"0.05em"}}>
+                {ptaxLoading ? "Buscando..." : "Buscar PTAX"}
+              </button>
+              {ptaxError ? (
+                <p style={{color:C.red,fontSize:11,textAlign:"right"}}>⚠ {ptaxError}</p>
+              ) : offBrl !== null ? (
+                <div style={{textAlign:"right"}}>
+                  <p style={{color:C.muted,fontSize:9,fontWeight:700,letterSpacing:"0.15em",marginBottom:4}}>OFFSHORE EM BRL</p>
+                  <p style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:600,color:C.gold}}>{brl(offBrl)}</p>
+                </div>
+              ) : (
+                <p style={{color:C.muted,fontSize:11,textAlign:"right",fontStyle:"italic"}}>Busque a cotação para converter o total offshore em R$</p>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Family info row */}
         {(data?.spouse?.name || (data?.dependents?.length > 0)) && (
@@ -626,5 +702,3 @@ function App(){
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<App />);
-
-
