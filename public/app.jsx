@@ -53,7 +53,10 @@ const saveReviewStore = (client, store) => {
 // ── Full client state (all edits, moves, added items, debts, etc.) ────────
 const saveClientState = (data) => {
   if (!data?.client || !data?.year) return;
-  try { localStorage.setItem(clientStateKey(data.client, data.year), JSON.stringify(data)); }
+  try {
+    const blob = {...data, _savedAt: Date.now()};
+    localStorage.setItem(clientStateKey(data.client, data.year), JSON.stringify(blob));
+  }
   catch(e){ console.warn("localStorage full?", e); }
 };
 const loadClientState = (client, year) => {
@@ -503,6 +506,48 @@ function GroupTable({group, onUpdate, onAddItem, dragSource, setDragSource, onMo
   );
 }
 
+function ChooseSessionModal({fresh, saved, onPick, onCancel}){
+  if (!fresh || !saved) return null;
+  const ts = saved._savedAt
+    ? new Date(saved._savedAt).toLocaleString("pt-BR", {dateStyle:"short", timeStyle:"short"})
+    : "(data desconhecida)";
+  const nGroupsSaved = saved.groups?.length || 0;
+  const nItemsSaved  = saved.groups?.reduce((a,g)=>a+(g.items?.length||0),0) || 0;
+  const nGroupsFresh = fresh.groups?.length || 0;
+  const nItemsFresh  = fresh.groups?.reduce((a,g)=>a+(g.items?.length||0),0) || 0;
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Nunito Sans',sans-serif"}}>
+      <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:12,maxWidth:580,width:"100%",padding:"28px 32px",boxShadow:"0 20px 60px rgba(0,0,0,.4)"}}>
+        <p style={{color:C.muted,fontSize:10,letterSpacing:"0.2em",fontWeight:700,marginBottom:8}}>SESSÃO ANTERIOR ENCONTRADA</p>
+        <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:24,fontWeight:600,color:C.text,marginBottom:6,lineHeight:1.2}}>
+          Recuperar trabalho anterior de <span style={{fontStyle:"italic",color:C.gold}}>{fresh.client}</span>?
+        </h2>
+        <p style={{color:C.muted,fontSize:12,lineHeight:1.6,marginBottom:22}}>
+          Já existe uma sessão salva deste cliente neste navegador. As <strong>revisões (✓) e comentários</strong> são preservados em qualquer opção.
+        </p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:24}}>
+          <button onClick={()=>onPick("saved")}
+            style={{background:C.card,border:`2px solid ${C.gold}`,borderRadius:10,padding:"18px 18px",cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}>
+            <p style={{color:C.gold,fontSize:10,fontWeight:700,letterSpacing:"0.1em",marginBottom:6}}>↩ RECUPERAR SESSÃO</p>
+            <p style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:6}}>Continuar de onde parei</p>
+            <p style={{color:C.muted,fontSize:10,lineHeight:1.5}}>Última edição em <strong>{ts}</strong><br/>{nGroupsSaved} grupos · {nItemsSaved} itens<br/>Preserva edições de valor, drag-and-drop, itens adicionados, dívidas, etc.</p>
+          </button>
+          <button onClick={()=>onPick("fresh")}
+            style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"18px 18px",cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}>
+            <p style={{color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.1em",marginBottom:6}}>✨ NOVA EXTRAÇÃO</p>
+            <p style={{color:C.text,fontSize:13,fontWeight:600,marginBottom:6}}>Começar do zero com IA</p>
+            <p style={{color:C.muted,fontSize:10,lineHeight:1.5}}>Usar a extração nova<br/>{nGroupsFresh} grupos · {nItemsFresh} itens<br/>Mantém ✓ revisados e 💬 comentários, descarta o resto.</p>
+          </button>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <button onClick={onCancel}
+            style={{background:"transparent",color:C.muted,border:"none",cursor:"pointer",fontSize:11,fontFamily:"inherit",padding:"6px 10px"}}>Cancelar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App(){
   const [step,setStep]=useState("auth-check");
   const [files,setFiles]=useState({dirpf:null,dcbe:null});
@@ -582,18 +627,22 @@ function App(){
       const savedState = parsed?.client && parsed?.year
         ? loadClientState(parsed.client, parsed.year) : null;
       if (savedState) {
-        // Use the saved full state — preserves all edits, moves, added items, etc.
-        setData(savedState);
-        setRestoredToast(true);
-        setTimeout(()=>setRestoredToast(false), 2500);
+        // Don't decide for the user — open modal asking which to use.
+        // Both options always preserve reviewed-toggles + comments via
+        // the separate `clientReview` store.
+        if (parsed?.groups && parsed?.client) {
+          parsed.groups = hydrateItemsFromStore(parsed.groups, parsed.client);
+        }
+        setPendingFresh(parsed);
+        setPendingSaved(savedState);
       } else {
-        // Fresh extraction — just hydrate review/comment fields from localStorage
+        // No saved state — just hydrate reviews/comments and proceed
         if (parsed?.groups && parsed?.client) {
           parsed.groups = hydrateItemsFromStore(parsed.groups, parsed.client);
         }
         setData(parsed);
+        setStep("verify");
       }
-      setStep("verify");
     }catch(e){setError(e.message);}
     finally{setLoading(false);setLoadMsg("");}
   };
@@ -655,6 +704,36 @@ function App(){
   // Lightweight toast for "saved" feedback
   const [savedToast, setSavedToast] = useState(false);
   const [restoredToast, setRestoredToast] = useState(false);
+  // Modal state when re-uploading a known client: user picks fresh vs saved
+  const [pendingFresh, setPendingFresh] = useState(null);
+  const [pendingSaved, setPendingSaved] = useState(null);
+
+  // Resolve session-choice modal. Both options preserve reviewed+comments
+  // because hydrateItemsFromStore is applied to `pendingFresh` before this point.
+  const handlePickSession = (which) => {
+    if (which === "saved" && pendingSaved) {
+      // Re-hydrate the saved state with the LATEST reviewed+comments so that
+      // a colleague's recent ✓ on another machine isn't lost.
+      const rehydrated = {
+        ...pendingSaved,
+        groups: hydrateItemsFromStore(pendingSaved.groups || [], pendingSaved.client),
+      };
+      setData(rehydrated);
+      setRestoredToast(true);
+      setTimeout(()=>setRestoredToast(false), 2500);
+    } else if (which === "fresh" && pendingFresh) {
+      // pendingFresh was already hydrated with reviewed+comments when we got it
+      setData(pendingFresh);
+    }
+    setPendingFresh(null);
+    setPendingSaved(null);
+    setStep("verify");
+  };
+  const handleCancelSession = () => {
+    setPendingFresh(null);
+    setPendingSaved(null);
+    // stay on upload screen
+  };
   const showSavedToast = () => {
     setSavedToast(true);
     setTimeout(()=>setSavedToast(false), 1400);
@@ -839,6 +918,7 @@ function App(){
   if(step==="upload")return(
     <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Nunito Sans',sans-serif",color:C.text,display:"flex",alignItems:"center",justifyContent:"center",padding:"32px 20px"}}>
       <style>{style}</style>
+      <ChooseSessionModal fresh={pendingFresh} saved={pendingSaved} onPick={handlePickSession} onCancel={handleCancelSession}/>
       <div style={{width:"100%",maxWidth:640}}>
         <div style={{textAlign:"center",marginBottom:32}}>
           <div style={{display:"inline-flex",alignItems:"center",gap:8,background:C.surface,border:`1px solid ${C.border}`,borderRadius:20,padding:"5px 16px",marginBottom:20}}>
@@ -866,12 +946,14 @@ function App(){
           </button>
           <button className="gh" style={{background:"transparent",color:C.muted,padding:"13px 22px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>{
             const saved = loadClientState(DEMO.client, DEMO.year);
+            const fresh = {...DEMO, groups: hydrateItemsFromStore(DEMO.groups, DEMO.client)};
             if (saved) {
-              setData(saved); setRestoredToast(true); setTimeout(()=>setRestoredToast(false),2500);
+              setPendingFresh(fresh);
+              setPendingSaved(saved);
             } else {
-              setData({...DEMO, groups: hydrateItemsFromStore(DEMO.groups, DEMO.client)});
+              setData(fresh);
+              setStep("verify");
             }
-            setStep("verify");
           }}>Usar Dados Demo</button>
         </div>
         <p style={{textAlign:"center",color:C.dim,fontSize:11,lineHeight:1.6}}>Os documentos são processados via API e não são armazenados.<br/>Também é possível carregar apenas um dos dois arquivos.</p>
