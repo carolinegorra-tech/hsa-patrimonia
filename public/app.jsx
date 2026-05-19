@@ -84,6 +84,102 @@ const hydrateItemsFromStore = (groups, client) => {
 };
 
 
+// ── Taxonomia completa: Grupo → Subcategoria → [Sub-itens] ───────────────
+// 99 sub-itens em 10 grupos. Sub-itens vazios [] significam que o nível 3
+// não se aplica (basta subcategoria).
+const TAXONOMY = {
+  "Bens Imóveis": {
+    "Residenciais": [], "Comerciais e Industriais": [], "Rurais": [], "Outros": [],
+  },
+  "Bens Móveis": {
+    "Veículos": [], "Aviação e Náutica": [], "Arte, Joias e Coleções": [],
+    "Outros": [], "NFT / Ativo Digital Não Fungível": [],
+  },
+  "Participações Societárias": {
+    "Empresa operacional — sócio majoritário / controlador": [],
+    "Empresa operacional — sócio minoritário": [],
+    "Holding patrimonial pura": [],
+    "Holding mista (patrimonial + operacional)": [],
+    "Sociedade em Conta de Participação (SCP)": [],
+    "Participação em startup / empresa anjo": [],
+    "Mercado de Capitais": [],
+    "Participação em empresa no exterior (LLC, offshore, BVI, Cayman)": [],
+    "Trust no exterior (Lei 14.754/23)": [],
+  },
+  "Aplicações e Investimentos": {
+    "Renda Fixa": ["CDB / RDB","LCI / LCA (isentos de IR para PF)","LIG — Letra Imobiliária Garantida","LC — Letra de Câmbio","CRI / CRA (isentos de IR para PF)","Debêntures (quando ativo)","Debêntures incentivadas (infraestrutura — isentas de IR)","COE — Certificado de Operações Estruturadas","DPGE — Depósito a Prazo com Garantia Especial","Tesouro Selic / Prefixado / IPCA+"],
+    "Fundos": ["Fundo DI / Renda Fixa","Fundo Multimercado (FIM)","Fundo de Ações (FIA)","Fundo Cambial","FIP — Fundo de Investimento em Participações","FIDC — Fundo de Direitos Creditórios","FII — Fundo de Investimento Imobiliário","ETF (renda fixa ou variável)","Fundo de Investimento Exclusivo (FIE)","Fundo no Exterior / Fundo Offshore"],
+    "Renda Variável": ["Ações (B3 — custódia em corretora)","BDRs — Brazilian Depositary Receipts","ETF negociado em bolsa","Opções / derivativos","Contratos futuros (dólar, índice, commodities)"],
+    "Alta Liquidez": ["Poupança","Conta remunerada / CDB liquidez diária","Fundo DI com resgate D+0"],
+  },
+  "Previdência Privada": {
+    "PGBL — deduz até 12% da renda bruta": [],
+    "VGBL — IR só sobre rendimentos": [],
+    "FAPI — Fundo de Aposentadoria Programada Individual": [],
+    "Previdência no exterior (401k, pension fund, plano estrangeiro)": [],
+  },
+  "Créditos e Direitos": {
+    "Empréstimos Concedidos": ["Mútuo / empréstimo a sócio (AFAC ou contrato formal)","Mútuo / empréstimo a familiar","Mútuo / empréstimo a terceiros"],
+    "Recebíveis e Direitos": ["Conta a receber (venda parcelada)","Direito sobre imóvel (promessa, opção de compra)","Precatório / crédito judicial","Herança a receber / inventário em curso","Indenização a receber (trabalhista, cível)","Depósito caução / garantia de aluguel","Saldo do FGTS (código 40)","Consórcio contemplado ou não (código 95)","Crédito tributário a recuperar","Ativos em inventário (espólio)"],
+  },
+  "Contas Bancárias e Saldos": {
+    "Conta corrente (banco nacional)": [],
+    "Conta poupança": [],
+    "Conta remunerada / CDB liquidez diária": [],
+    "Conta no exterior (saldo > US$ 1.000 em 31/12)": [],
+    "Conta em corretora no exterior (IB, Schwab...)": [],
+    "Conta em fintech / carteira digital": [],
+  },
+  "Criptoativos": {
+    "Bitcoin (BTC)": [], "Ethereum (ETH)": [], "Stablecoins (USDT, USDC, BRZ)": [],
+    "Altcoins diversas": [], "Tokens de utilidade / governança": [], "NFTs": [],
+  },
+  "Remuneração Variável em Equity": {
+    "Opções de Compra": ["Stock Options (não exercida)","Stock Options exercidas","Warrants"],
+    "Ações Restritas": ["RSU — Restricted Stock Unit (em vesting)","RSU liquidada","RSA — Restricted Stock Award"],
+    "Planos de Compra": ["ESPP — Employee Stock Purchase Plan","Matching de ações pelo empregador"],
+    "Phantom / Sintéticos": ["Phantom Shares","SAR — Stock Appreciation Rights","Bônus atrelado a performance (cash-settled)"],
+    "Startups": ["Opção de compra em startup","Vesting em empresa não listada","SAFE — Simple Agreement for Future Equity","Nota conversível"],
+  },
+};
+
+// Taxonomia das DÍVIDAS (estrutura paralela)
+const DEBT_TAXONOMY = {
+  "Financiamentos": ["Financiamento imobiliário (SFH, SFI, alienação fiduciária)","Financiamento de veículo / bem móvel"],
+  "Empréstimos": ["Empréstimo bancário (pessoal, consignado)","Empréstimo de pessoa física (sócio, familiar)","Empréstimo de pessoa jurídica (empresa do grupo)"],
+  "Outros Passivos": ["Debêntures emitidas","Parcelamento fiscal (REFIS)","Garantia prestada (aval, fiança)","Dívida no exterior"],
+};
+
+// Fuzzy match: returns the canonical group name in TAXONOMY that best matches
+// the AI-extracted group name (e.g. "Bens Imóveis", "Imóveis", "Bem Imovel").
+const canonicalGroup = (name) => {
+  const n = (name||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  if (n.includes("imove") || n.includes("imove")) return "Bens Imóveis";
+  if (n.includes("crypt") || n.includes("cripto") || n.includes("bitcoin")) return "Criptoativos";
+  if (n.includes("equity") || n.includes("remunera") || n.includes("stock") || n.includes("rsu") || n.includes("phantom")) return "Remuneração Variável em Equity";
+  if (n.includes("previd")) return "Previdência Privada";
+  if (n.includes("conta") || n.includes("banca")) return "Contas Bancárias e Saldos";
+  if (n.includes("societ") || n.includes("participac") || n.includes("holding")) return "Participações Societárias";
+  if (n.includes("aplica") || n.includes("invest") || n.includes("renda fixa") || n.includes("fundo") || n.includes("acao") || n.includes("acoe")) return "Aplicações e Investimentos";
+  if (n.includes("credit") || n.includes("direito")) return "Créditos e Direitos";
+  if (n.includes("move") || n.includes("veicul") || n.includes("arte") || n.includes("obra")) return "Bens Móveis";
+  return null;  // unknown — show all options
+};
+
+// Subcategories for a given group name (returns [] if group unknown)
+const subcategoriesFor = (groupName) => {
+  const canon = canonicalGroup(groupName);
+  if (!canon || !TAXONOMY[canon]) return null;
+  return Object.keys(TAXONOMY[canon]);
+};
+
+// Sub-sub-categories for a given (group, subcategory) — returns [] if none
+const subsubcategoriesFor = (groupName, subName) => {
+  const canon = canonicalGroup(groupName);
+  if (!canon || !TAXONOMY[canon] || !TAXONOMY[canon][subName]) return [];
+  return TAXONOMY[canon][subName];
+};
+
 const DEMO = {
   client:"JANE MARGARET DOE", year:2024,
   spouse:{name:"JOHN ROBERT DOE", marriage_regime:"Comunhão Parcial de Bens", marriage_date:"08/04/2003"},
@@ -93,37 +189,38 @@ const DEMO = {
   ],
   groups:[
     {name:"Bens Imóveis", jurisdiction:"Brasil", items:[
-      {id:1, desc:"Apartamento 280m² Rua dos Pinheiros 1428 ap 502", loc:"São Paulo, SP", dirpf:9200000, dcbe:null, comments:""},
-      {id:2, desc:"Casa de campo 450m² Itu SP", loc:"Itu, SP", dirpf:2480000, dcbe:null, comments:""},
-      {id:3, desc:"Apartamento 95m² Copacabana", loc:"Rio de Janeiro, RJ", dirpf:1500000, dcbe:null, comments:""},
+      {id:1, desc:"Apartamento 280m² Rua dos Pinheiros 1428 ap 502", loc:"São Paulo, SP", subcategory:"Residenciais", subsubcategory:"", dirpf:9200000, dcbe:null, comments:""},
+      {id:2, desc:"Casa de campo 450m² Itu SP", loc:"Itu, SP", subcategory:"Residenciais", subsubcategory:"", dirpf:2480000, dcbe:null, comments:""},
+      {id:3, desc:"Apartamento 95m² Copacabana", loc:"Rio de Janeiro, RJ", subcategory:"Residenciais", subsubcategory:"", dirpf:1500000, dcbe:null, comments:""},
     ]},
-    {name:"Bens Móveis / Obras de Arte", jurisdiction:"Brasil", items:[
-      {id:4, desc:"Veículos e joias", loc:"Brasil", dirpf:1840000, dcbe:null, comments:""},
+    {name:"Bens Móveis", jurisdiction:"Brasil", items:[
+      {id:4, desc:"Veículos e joias", loc:"Brasil", subcategory:"Veículos", subsubcategory:"", dirpf:1840000, dcbe:null, comments:""},
     ]},
     {name:"Participações Societárias", jurisdiction:"Brasil", items:[
-      {id:5, desc:"Cotas empresa operacional", loc:"Brasil", dirpf:45220000, dcbe:null, comments:""},
+      {id:5, desc:"Cotas empresa operacional", loc:"Brasil", subcategory:"Empresa operacional — sócio majoritário / controlador", subsubcategory:"", dirpf:45220000, dcbe:null, comments:""},
     ]},
     {name:"Aplicações e Investimentos", jurisdiction:"Brasil", items:[
-      {id:6, desc:"CDB / Fundos / Renda Fixa", loc:"Brasil", dirpf:17650000, dcbe:null, comments:""},
+      {id:6, desc:"CDB Banco BTG", loc:"Brasil", subcategory:"Renda Fixa", subsubcategory:"CDB / RDB", dirpf:10000000, dcbe:null, comments:""},
+      {id:7, desc:"Fundo Multimercado XP", loc:"Brasil", subcategory:"Fundos", subsubcategory:"Fundo Multimercado (FIM)", dirpf:7650000, dcbe:null, comments:""},
     ]},
     {name:"Créditos e Direitos", jurisdiction:"Brasil", items:[
-      {id:7, desc:"Créditos a receber", loc:"Brasil", dirpf:2350000, dcbe:null, comments:""},
+      {id:8, desc:"Créditos a receber", loc:"Brasil", subcategory:"Recebíveis e Direitos", subsubcategory:"Conta a receber (venda parcelada)", dirpf:2350000, dcbe:null, comments:""},
     ]},
-    {name:"Contas Bancárias", jurisdiction:"Brasil", items:[
-      {id:8, desc:"Conta Corrente / Poupança", loc:"Brasil", dirpf:612400, dcbe:null, comments:""},
+    {name:"Contas Bancárias e Saldos", jurisdiction:"Brasil", items:[
+      {id:9, desc:"Conta Corrente Itaú", loc:"Brasil", subcategory:"Conta corrente (banco nacional)", subsubcategory:"", dirpf:612400, dcbe:null, comments:""},
     ]},
-    {name:"Participações no Capital de Empresas no Exterior", jurisdiction:"Offshore", items:[
-      {id:9, desc:"DOE FAMILY HOLDINGS LTD. (100%)", loc:"Ilhas Cayman", dirpf:null, dcbe:3420000, comments:""},
-      {id:10, desc:"JD INVESTMENTS LLC (70%)", loc:"Delaware, EUA", dirpf:null, dcbe:1580000, comments:""},
+    {name:"Participações Societárias", jurisdiction:"Offshore", items:[
+      {id:10, desc:"DOE FAMILY HOLDINGS LTD. (100%)", loc:"Ilhas Cayman", subcategory:"Participação em empresa no exterior (LLC, offshore, BVI, Cayman)", subsubcategory:"", dirpf:null, dcbe:3420000, comments:""},
+      {id:11, desc:"JD INVESTMENTS LLC (70%)", loc:"Delaware, EUA", subcategory:"Participação em empresa no exterior (LLC, offshore, BVI, Cayman)", subsubcategory:"", dirpf:null, dcbe:1580000, comments:""},
     ]},
-    {name:"Depósitos em Contas Bancárias no Exterior", jurisdiction:"Offshore", items:[
-      {id:11, desc:"Citibank Private Bank", loc:"EUA", dirpf:null, dcbe:584300, comments:""},
-      {id:12, desc:"Banco Santander Internacional", loc:"EUA", dirpf:null, dcbe:218700, comments:""},
-      {id:13, desc:"HSBC Jersey", loc:"Ilha de Jersey", dirpf:null, dcbe:142500, comments:""},
+    {name:"Contas Bancárias e Saldos", jurisdiction:"Offshore", items:[
+      {id:12, desc:"Citibank Private Bank", loc:"EUA", subcategory:"Conta no exterior (saldo > US$ 1.000 em 31/12)", subsubcategory:"", dirpf:null, dcbe:584300, comments:""},
+      {id:13, desc:"Banco Santander Internacional", loc:"EUA", subcategory:"Conta no exterior (saldo > US$ 1.000 em 31/12)", subsubcategory:"", dirpf:null, dcbe:218700, comments:""},
+      {id:14, desc:"HSBC Jersey", loc:"Ilha de Jersey", subcategory:"Conta no exterior (saldo > US$ 1.000 em 31/12)", subsubcategory:"", dirpf:null, dcbe:142500, comments:""},
     ]},
   ],
   debts:[
-    {id:1, desc:"Financiamento imobiliário — Banco Itaú Unibanco S.A.", value:1620000},
+    {id:1, desc:"Financiamento imobiliário — Banco Itaú Unibanco S.A.", subcategory:"Financiamentos", subsubcategory:"Financiamento imobiliário (SFH, SFI, alienação fiduciária)", value:1620000},
   ],
 };
 
@@ -182,6 +279,8 @@ function GroupTable({group, onUpdate, onAddItem, dragSource, setDragSource, onMo
   const totD=group.items.reduce((a,i)=>a+(i.dirpf||0),0);
   const totC=group.items.reduce((a,i)=>a+(i.dcbe||0),0);
   const nReviewed = group.items.filter(i => i.reviewed).length;
+  const subs = subcategoriesFor(group.name);
+  const nMissingSub = subs ? group.items.filter(i => !i.subcategory).length : 0;
   const toggleComment = (idx,e) => { e.stopPropagation(); setOpenComment(p=>({...p,[idx]:!p[idx]})); };
   // Pre-open the comment row if the item already has a saved comment
   useEffect(()=>{
@@ -222,6 +321,11 @@ function GroupTable({group, onUpdate, onAddItem, dragSource, setDragSource, onMo
               ✓ {nReviewed}/{group.items.length}
             </span>
           )}
+          {nMissingSub > 0 && (
+            <span title="Itens sem subcategoria classificada" style={{background:"rgba(224,82,82,.12)",color:C.red,fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:20}}>
+              ⚠ {nMissingSub} sem subcat.
+            </span>
+          )}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:20}}>
           <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:17,fontWeight:600,color:C.goldBright}}>{brl(totD)}</span>
@@ -240,11 +344,12 @@ function GroupTable({group, onUpdate, onAddItem, dragSource, setDragSource, onMo
                 {[
                   {h:"#", w:36, align:"center"},
                   {h:"Descrição", w:"auto", align:"left"},
-                  {h:"País / Local", w:160, align:"left"},
+                  {h:"País / Local", w:140, align:"left"},
+                  {h:"Classificação", w:220, align:"left"},
                   {h:"DIRPF (R$)", w:140, align:"right"},
                   {h:"DCBE (US$)", w:130, align:"right"},
-                  {h:"", w:42, align:"right"},     // comment col — fixed
-                  {h:"", w:56, align:"right"},     // toggle col — fixed
+                  {h:"", w:42, align:"right"},
+                  {h:"", w:56, align:"right"},
                 ].map(({h,w,align},i)=>(
                   <th key={i} style={{padding:"7px 12px",color:C.muted,fontWeight:600,fontSize:10,letterSpacing:"0.08em",textTransform:"uppercase",textAlign:align,whiteSpace:"nowrap",width:typeof w==="number"?w+"px":w}}>{h}</th>
                 ))}
@@ -280,6 +385,53 @@ function GroupTable({group, onUpdate, onAddItem, dragSource, setDragSource, onMo
                           style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,padding:"3px 7px",color:C.muted,fontSize:11,fontFamily:"'Nunito Sans',sans-serif",width:90}}/>
                       : item.loc}
                   </td>
+                  <td style={{padding:"9px 12px",whiteSpace:"nowrap",verticalAlign:"top"}}>
+                    {(() => {
+                      const subs = subcategoriesFor(group.name);
+                      if (!subs) return <span style={{color:C.dim,fontSize:10,fontStyle:"italic"}}>—</span>;
+                      const subsubs = subsubcategoriesFor(group.name, item.subcategory);
+                      const needsSubsub = subsubs.length > 0;
+                      const missingSub = !item.subcategory;
+                      const missingSubsub = needsSubsub && !item.subsubcategory;
+                      return (
+                        <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                          <select
+                            value={item.subcategory || ""}
+                            onChange={e=>{
+                              onUpdate(group.name,group.jurisdiction,idx,"subcategory",e.target.value);
+                              onUpdate(group.name,group.jurisdiction,idx,"subsubcategory","");  // reset
+                            }}
+                            style={{
+                              background: missingSub ? "rgba(224,82,82,.08)" : "transparent",
+                              border: `1px solid ${missingSub ? C.red : C.border}`,
+                              borderRadius:4,padding:"4px 6px",
+                              color: missingSub ? C.red : C.text,
+                              fontSize:10,fontFamily:"'Nunito Sans',sans-serif",
+                              width:200,maxWidth:200, cursor:"pointer",
+                            }}>
+                            <option value="">— subcategoria —</option>
+                            {subs.map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                          {needsSubsub && (
+                            <select
+                              value={item.subsubcategory || ""}
+                              onChange={e=>onUpdate(group.name,group.jurisdiction,idx,"subsubcategory",e.target.value)}
+                              style={{
+                                background: missingSubsub ? "rgba(224,82,82,.08)" : "transparent",
+                                border: `1px solid ${missingSubsub ? C.red : C.border}`,
+                                borderRadius:4,padding:"4px 6px",
+                                color: missingSubsub ? C.red : C.muted,
+                                fontSize:10,fontFamily:"'Nunito Sans',sans-serif",
+                                width:200,maxWidth:200, cursor:"pointer",
+                              }}>
+                              <option value="">— instrumento —</option>
+                              {subsubs.map(s => <option key={s} value={s}>{s}</option>)}
+                            </select>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </td>
                   <td style={{padding:"9px 12px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:C.text}}>
                     <EditCell value={item.dirpf} onChange={v=>onUpdate(group.name,group.jurisdiction,idx,"dirpf",v)}/>
                   </td>
@@ -301,7 +453,7 @@ function GroupTable({group, onUpdate, onAddItem, dragSource, setDragSource, onMo
                 </tr>,
                 openComment[idx] ? (
                   <tr key={(item.id||idx)+"c"} style={{background:C.surface}}>
-                    <td colSpan={7} style={{padding:"8px 18px 10px"}}>
+                    <td colSpan={8} style={{padding:"8px 18px 10px"}}>
                       <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
                         <span style={{fontSize:10,color:C.muted,paddingTop:6,whiteSpace:"nowrap"}}>Comentário</span>
                         <textarea
@@ -319,7 +471,7 @@ function GroupTable({group, onUpdate, onAddItem, dragSource, setDragSource, onMo
             </tbody>
             <tfoot>
               <tr style={{background:C.surface,borderTop:`1px solid ${C.borderLight}`}}>
-                <td colSpan={3} style={{padding:"9px 12px",color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.1em"}}>SUBTOTAL</td>
+                <td colSpan={4} style={{padding:"9px 12px",color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.1em"}}>SUBTOTAL</td>
                 <td style={{padding:"9px 12px",color:C.goldBright,textAlign:"right",fontFamily:"monospace",fontWeight:700,fontSize:12}}>{n(totD)}</td>
                 <td style={{padding:"9px 12px",color:C.goldBright,textAlign:"right",fontFamily:"monospace",fontWeight:700,fontSize:11}}>{totC>0?n(totC):"—"}</td>
                 <td/><td/>
@@ -539,7 +691,7 @@ function App(){
       const groups = prev.groups.map(g => {
         if (g.name === grpName && g.jurisdiction === juris) {
           const newId = (g.items.reduce((a,i)=>Math.max(a,i.id||0),0))+1;
-          return {...g, items:[...g.items, {id:newId, desc:"", loc:"", dirpf:null, dcbe:null, comments:""}]};
+          return {...g, items:[...g.items, {id:newId, desc:"", loc:"", subcategory:"", dirpf:null, dcbe:null, comments:""}]};
         }
         return g;
       });
@@ -583,7 +735,7 @@ function App(){
         setActiveCat(name);
         return prev;
       }
-      const newGrp = {name, jurisdiction: juris, items:[{id:1, desc:"", loc:"", dirpf:null, dcbe:null, comments:""}]};
+      const newGrp = {name, jurisdiction: juris, items:[{id:1, desc:"", loc:"", subcategory:"", dirpf:null, dcbe:null, comments:""}]};
       return {...prev, groups:[...prev.groups, newGrp]};
     });
     setActiveJuris(juris);
@@ -600,7 +752,7 @@ function App(){
   const addDebt = () => {
     setData(prev => {
       const id = ((prev.debts||[]).reduce((a,d)=>Math.max(a,d.id||0),0))+1;
-      return {...prev, debts:[...(prev.debts||[]), {id, desc:"", value:null}]};
+      return {...prev, debts:[...(prev.debts||[]), {id, desc:"", subcategory:"", subsubcategory:"", value:null}]};
     });
   };
 
@@ -717,6 +869,26 @@ function App(){
     </div>
   );
 
+  // Count items missing required classification (subcategory + optionally subsubcategory)
+  const nMissingSubAll = (data?.groups||[]).reduce((a, g) => {
+    const subs = subcategoriesFor(g.name);
+    if (!subs) return a;
+    return a + g.items.filter(i => {
+      if (!i.subcategory) return true;
+      const needsSubsub = subsubcategoriesFor(g.name, i.subcategory).length > 0;
+      return needsSubsub && !i.subsubcategory;
+    }).length;
+  }, 0);
+
+  // Also debts must be classified
+  const nMissingDebt = (data?.debts||[]).filter(d => {
+    if (!d.subcategory) return true;
+    const subs = DEBT_TAXONOMY[d.subcategory] || [];
+    return subs.length > 0 && !d.subsubcategory;
+  }).length;
+
+  const nMissingTotal = nMissingSubAll + nMissingDebt;
+
   if(step==="verify")return(
     <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Nunito Sans',sans-serif",color:C.text,padding:"24px 20px"}} className="fi">
       <style>{style}</style>
@@ -755,7 +927,19 @@ function App(){
               🧹 Limpar revisão
             </button>
             <button className="gh" style={{background:"transparent",color:C.muted,padding:"10px 18px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:12}} onClick={()=>setStep("upload")}>← Voltar</button>
-            <button className="bg" style={{background:C.gold,color:"#080C14",padding:"10px 22px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontWeight:700,fontSize:13,letterSpacing:"0.04em"}} onClick={confirm}>✓ Confirmar e Gerar Excel + PPT</button>
+            <button className="bg"
+              disabled={nMissingTotal > 0}
+              title={nMissingTotal > 0 ? `${nMissingTotal} item${nMissingTotal>1?"s":""} sem subcategoria — classifique antes de gerar` : "Confirmar e gerar arquivos"}
+              style={{
+                background: nMissingTotal > 0 ? C.border : C.gold,
+                color: nMissingTotal > 0 ? C.muted : "#080C14",
+                padding:"10px 22px",borderRadius:8,border:"none",
+                cursor: nMissingTotal > 0 ? "not-allowed" : "pointer",
+                fontFamily:"'Nunito Sans',sans-serif",fontWeight:700,fontSize:13,letterSpacing:"0.04em",
+              }}
+              onClick={()=>nMissingSubAll === 0 && confirm()}>
+              {nMissingTotal > 0 ? `⚠ ${nMissingTotal} sem subcat.` : "✓ Confirmar e Gerar Excel + PPT"}
+            </button>
           </div>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
@@ -988,31 +1172,58 @@ function App(){
                   <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                     <thead>
                       <tr style={{background:C.surface}}>
-                        {["#","Descrição da Dívida / Credor","Valor (R$)",""].map((h,i)=>(
-                          <th key={i} style={{padding:"7px 12px",color:C.muted,fontWeight:600,fontSize:10,letterSpacing:"0.08em",textTransform:"uppercase",textAlign:i>=2?"right":"left",whiteSpace:"nowrap"}}>{h}</th>
+                        {["#","Descrição da Dívida / Credor","Classificação","Valor (R$)",""].map((h,i)=>(
+                          <th key={i} style={{padding:"7px 12px",color:C.muted,fontWeight:600,fontSize:10,letterSpacing:"0.08em",textTransform:"uppercase",textAlign:i>=3?"right":"left",whiteSpace:"nowrap"}}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {debts.map((d,idx)=>(
-                        <tr key={d.id||idx} className="rh" style={{borderTop:`1px solid ${C.border}`}}>
-                          <td style={{padding:"9px 12px",color:C.muted,fontSize:10,width:32}}>{d.id}</td>
-                          <td style={{padding:"9px 12px",color:C.text}}>
-                            {d.desc===''||d.desc==null
-                              ? <input defaultValue="" placeholder="Ex: Financiamento Bradesco" onBlur={e=>updateDebt(idx,"desc",e.target.value)}
-                                  style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,padding:"3px 7px",color:C.text,fontSize:11,fontFamily:"'Nunito Sans',sans-serif",width:"100%"}}/>
-                              : d.desc}
-                          </td>
-                          <td style={{padding:"9px 12px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:C.red}}>
-                            <EditCell value={d.value} onChange={v=>updateDebt(idx,"value",v)}/>
-                          </td>
-                          <td style={{padding:"9px 8px",width:32}}/>
-                        </tr>
-                      ))}
+                      {debts.map((d,idx)=>{
+                        const subs = Object.keys(DEBT_TAXONOMY);
+                        const subsubs = d.subcategory && DEBT_TAXONOMY[d.subcategory] || [];
+                        const needsSubsub = subsubs.length > 0;
+                        const missingSub = !d.subcategory;
+                        const missingSubsub = needsSubsub && !d.subsubcategory;
+                        return (
+                          <tr key={d.id||idx} className="rh" style={{borderTop:`1px solid ${C.border}`}}>
+                            <td style={{padding:"9px 12px",color:C.muted,fontSize:10,width:32,verticalAlign:"top"}}>{d.id}</td>
+                            <td style={{padding:"9px 12px",color:C.text,verticalAlign:"top"}}>
+                              {d.desc===''||d.desc==null
+                                ? <input defaultValue="" placeholder="Ex: Financiamento Bradesco" onBlur={e=>updateDebt(idx,"desc",e.target.value)}
+                                    style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,padding:"3px 7px",color:C.text,fontSize:11,fontFamily:"'Nunito Sans',sans-serif",width:"100%"}}/>
+                                : d.desc}
+                            </td>
+                            <td style={{padding:"9px 12px",verticalAlign:"top",whiteSpace:"nowrap"}}>
+                              <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                                <select
+                                  value={d.subcategory || ""}
+                                  onChange={e=>{ updateDebt(idx,"subcategory",e.target.value); updateDebt(idx,"subsubcategory",""); }}
+                                  style={{background: missingSub?"rgba(224,82,82,.08)":"transparent",border:`1px solid ${missingSub?C.red:C.border}`,borderRadius:4,padding:"4px 6px",color:missingSub?C.red:C.text,fontSize:10,fontFamily:"'Nunito Sans',sans-serif",width:200,cursor:"pointer"}}>
+                                  <option value="">— subcategoria —</option>
+                                  {subs.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                                {needsSubsub && (
+                                  <select
+                                    value={d.subsubcategory || ""}
+                                    onChange={e=>updateDebt(idx,"subsubcategory",e.target.value)}
+                                    style={{background: missingSubsub?"rgba(224,82,82,.08)":"transparent",border:`1px solid ${missingSubsub?C.red:C.border}`,borderRadius:4,padding:"4px 6px",color:missingSubsub?C.red:C.muted,fontSize:10,fontFamily:"'Nunito Sans',sans-serif",width:200,cursor:"pointer"}}>
+                                    <option value="">— instrumento —</option>
+                                    {subsubs.map(s => <option key={s} value={s}>{s}</option>)}
+                                  </select>
+                                )}
+                              </div>
+                            </td>
+                            <td style={{padding:"9px 12px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:C.red,verticalAlign:"top"}}>
+                              <EditCell value={d.value} onChange={v=>updateDebt(idx,"value",v)}/>
+                            </td>
+                            <td style={{padding:"9px 8px",width:32}}/>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                     <tfoot>
                       <tr style={{background:C.surface,borderTop:`1px solid ${C.borderLight}`}}>
-                        <td colSpan={2} style={{padding:"9px 12px",color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.1em"}}>TOTAL DÍVIDAS</td>
+                        <td colSpan={3} style={{padding:"9px 12px",color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.1em"}}>TOTAL DÍVIDAS</td>
                         <td style={{padding:"9px 12px",color:C.red,textAlign:"right",fontFamily:"monospace",fontWeight:700,fontSize:12}}>{totDebts>0?`− ${n(totDebts)}`:"—"}</td>
                         <td/>
                       </tr>
@@ -1049,7 +1260,18 @@ function App(){
 
         {error&&<div style={{background:"rgba(224,82,82,.1)",border:`1px solid ${C.red}`,borderRadius:8,padding:"12px 16px",color:C.red,fontSize:12,marginBottom:14}}>⚠ {error}</div>}
         <div style={{textAlign:"center",paddingBottom:32}}>
-          <button className="bg" style={{background:C.gold,color:"#080C14",padding:"15px 44px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontWeight:700,fontSize:15,letterSpacing:"0.04em"}} onClick={confirm}>✓ Confirmar e Gerar Excel + PPT</button>
+          <button className="bg"
+            disabled={nMissingTotal > 0}
+            style={{
+              background: nMissingTotal > 0 ? C.border : C.gold,
+              color: nMissingTotal > 0 ? C.muted : "#080C14",
+              padding:"15px 44px",borderRadius:10,border:"none",
+              cursor: nMissingTotal > 0 ? "not-allowed" : "pointer",
+              fontFamily:"'Nunito Sans',sans-serif",fontWeight:700,fontSize:15,letterSpacing:"0.04em",
+            }}
+            onClick={()=>nMissingSubAll === 0 && confirm()}>
+            {nMissingTotal > 0 ? `⚠ Classifique ${nMissingTotal} item${nMissingTotal>1?"s":""} antes de gerar` : "✓ Confirmar e Gerar Excel + PPT"}
+          </button>
           <p style={{color:C.dim,fontSize:11,marginTop:10}}>Os arquivos são gerados no chat após confirmação</p>
         </div>
       </div>
