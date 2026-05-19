@@ -66,11 +66,12 @@ const hydrateItemsFromStore = (groups, client) => {
     items: g.items.map(item => {
       const k = normalizeKey(item.desc);
       const saved = store[k];
-      if (!saved) return item;
+      // Always wipe whatever comment the AI put in `comments` — comments should
+      // ONLY come from the user typing in the textarea (saved in localStorage).
       return {
         ...item,
-        comments: item.comments || saved.comments || "",
-        reviewed: saved.reviewed || false,
+        comments: saved?.comments || "",
+        reviewed: saved?.reviewed || false,
       };
     }),
   }));
