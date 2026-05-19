@@ -93,11 +93,52 @@ function EditCell({value, onChange}) {
   );
 }
 
-function GroupTable({group, onUpdate, onAddItem}){
+function Toggle({on, onChange}){
+  return (
+    <div onClick={e=>{e.stopPropagation();onChange(!on);}}
+      title={on?"Revisado ✓":"Marcar como revisado"}
+      style={{
+        width:36, height:20, borderRadius:10, cursor:"pointer",
+        background: on ? "#4CAF50" : "#D0D0CE",
+        position:"relative", transition:"background .2s", flexShrink:0,
+        boxShadow: on ? "0 0 0 1px rgba(76,175,80,.4)" : "0 0 0 1px #C0C0BE",
+      }}>
+      <div style={{
+        position:"absolute", top:2, left: on ? 18 : 2,
+        width:16, height:16, borderRadius:"50%",
+        background:"#fff", transition:"left .18s",
+        boxShadow:"0 1px 3px rgba(0,0,0,.25)",
+      }}/>
+    </div>
+  );
+}
+
+function GroupTable({group, onUpdate, onAddItem, clientKey}){
   const [open,setOpen]=useState(true);
-  const [openComment,setOpenComment]=useState({});  // {idx: true/false}
+  const [openComment,setOpenComment]=useState({});
+
+  // Review state — persisted in localStorage keyed by clientKey+desc so it
+  // survives across sessions and is pre-loaded next time same client is reviewed.
+  const lsKey = (item) => `review:${clientKey||"demo"}:${item.desc||item.id}`;
+  const initReviewed = () => {
+    const r={};
+    group.items.forEach((item,idx)=>{
+      try{ if(localStorage.getItem(lsKey(item))==="1") r[idx]=true; }catch(e){}
+    });
+    return r;
+  };
+  const [reviewed, setReviewed] = useState(initReviewed);
+
+  const toggleReview = (idx, item, e) => {
+    e.stopPropagation();
+    const next = !reviewed[idx];
+    setReviewed(p=>({...p,[idx]:next}));
+    try{ next ? localStorage.setItem(lsKey(item),"1") : localStorage.removeItem(lsKey(item)); }catch(e){}
+  };
+
   const totD=group.items.reduce((a,i)=>a+(i.dirpf||0),0);
   const totC=group.items.reduce((a,i)=>a+(i.dcbe||0),0);
+  const nReviewed = Object.values(reviewed).filter(Boolean).length;
   const toggleComment = (idx,e) => { e.stopPropagation(); setOpenComment(p=>({...p,[idx]:!p[idx]})); };
   return(
     <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,marginBottom:10,overflow:"hidden"}}>
@@ -105,6 +146,11 @@ function GroupTable({group, onUpdate, onAddItem}){
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <span style={{fontWeight:700,fontSize:13,color:C.text}}>{group.name}</span>
           <span style={{background:C.surface,color:C.muted,fontSize:10,padding:"2px 8px",borderRadius:20}}>{group.items.length} {group.items.length===1?"item":"itens"}</span>
+          {nReviewed > 0 && (
+            <span style={{background:"rgba(76,175,80,.12)",color:"#4CAF50",fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:20}}>
+              ✓ {nReviewed}/{group.items.length}
+            </span>
+          )}
         </div>
         <div style={{display:"flex",alignItems:"center",gap:20}}>
           <span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:17,fontWeight:600,color:C.goldBright}}>{brl(totD)}</span>
@@ -120,7 +166,7 @@ function GroupTable({group, onUpdate, onAddItem}){
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
             <thead>
               <tr style={{background:C.surface}}>
-                {["#","Descrição","País / Local","DIRPF (R$)","DCBE (US$)",""].map((h,i)=>(
+                {["#","Descrição","País / Local","DIRPF (R$)","DCBE (US$)","",""].map((h,i)=>(
                   <th key={i} style={{padding:"7px 12px",color:C.muted,fontWeight:600,fontSize:10,letterSpacing:"0.08em",textTransform:"uppercase",textAlign:i>=3?"right":i===0?"center":"left",whiteSpace:"nowrap"}}>{h}</th>
                 ))}
               </tr>
@@ -156,10 +202,13 @@ function GroupTable({group, onUpdate, onAddItem}){
                       {item.comments ? "💬" : "🗒️"}
                     </button>
                   </td>
+                  <td style={{padding:"9px 12px",textAlign:"right"}}>
+                    <Toggle on={!!reviewed[idx]} onChange={v=>toggleReview(idx,item,{stopPropagation:()=>{}})}/>
+                  </td>
                 </tr>,
                 openComment[idx] ? (
                   <tr key={(item.id||idx)+"c"} style={{background:C.surface}}>
-                    <td colSpan={6} style={{padding:"8px 18px 10px"}}>
+                    <td colSpan={7} style={{padding:"8px 18px 10px"}}>
                       <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
                         <span style={{fontSize:10,color:C.muted,paddingTop:6,whiteSpace:"nowrap"}}>Comentário</span>
                         <textarea
@@ -180,7 +229,7 @@ function GroupTable({group, onUpdate, onAddItem}){
                 <td colSpan={3} style={{padding:"9px 12px",color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.1em"}}>SUBTOTAL</td>
                 <td style={{padding:"9px 12px",color:C.goldBright,textAlign:"right",fontFamily:"monospace",fontWeight:700,fontSize:12}}>{n(totD)}</td>
                 <td style={{padding:"9px 12px",color:C.goldBright,textAlign:"right",fontFamily:"monospace",fontWeight:700,fontSize:11}}>{totC>0?n(totC):"—"}</td>
-                <td/>
+                <td/><td/>
               </tr>
             </tfoot>
           </table>
@@ -703,7 +752,7 @@ function App(){
           </div>
         ) : (
           <div style={{marginBottom:20}}>
-            {visibleGrps.map(g=><GroupTable key={g.name+g.jurisdiction} group={g} onUpdate={updateItem} onAddItem={addItemToGroup}/>)}
+            {visibleGrps.map(g=><GroupTable key={g.name+g.jurisdiction} group={g} onUpdate={updateItem} onAddItem={addItemToGroup} clientKey={data?.client||""}/>)}
           </div>
         )}
 
