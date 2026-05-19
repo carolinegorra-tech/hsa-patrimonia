@@ -279,8 +279,7 @@ function GroupTable({group, onUpdate, onAddItem, dragSource, setDragSource, onMo
   const totD=group.items.reduce((a,i)=>a+(i.dirpf||0),0);
   const totC=group.items.reduce((a,i)=>a+(i.dcbe||0),0);
   const nReviewed = group.items.filter(i => i.reviewed).length;
-  const subs = subcategoriesFor(group.name);
-  const nMissingSub = subs ? group.items.filter(i => !i.subcategory).length : 0;
+  const nLowConfGrp = group.items.filter(i => i.confidence === "low").length;
   const toggleComment = (idx,e) => { e.stopPropagation(); setOpenComment(p=>({...p,[idx]:!p[idx]})); };
   // Pre-open the comment row if the item already has a saved comment
   useEffect(()=>{
@@ -321,9 +320,9 @@ function GroupTable({group, onUpdate, onAddItem, dragSource, setDragSource, onMo
               ✓ {nReviewed}/{group.items.length}
             </span>
           )}
-          {nMissingSub > 0 && (
-            <span title="Itens sem subcategoria classificada" style={{background:"rgba(224,82,82,.12)",color:C.red,fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:20}}>
-              ⚠ {nMissingSub} sem subcat.
+          {nLowConfGrp > 0 && (
+            <span title="Itens com classificação inferida pela IA — confira" style={{background:"rgba(255,193,7,.15)",color:"#B07C00",fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:20}}>
+              ⚠ {nLowConfGrp} verificar
             </span>
           )}
         </div>
@@ -391,21 +390,25 @@ function GroupTable({group, onUpdate, onAddItem, dragSource, setDragSource, onMo
                       if (!subs) return <span style={{color:C.dim,fontSize:10,fontStyle:"italic"}}>—</span>;
                       const subsubs = subsubcategoriesFor(group.name, item.subcategory);
                       const needsSubsub = subsubs.length > 0;
-                      const missingSub = !item.subcategory;
-                      const missingSubsub = needsSubsub && !item.subsubcategory;
+                      // "Low confidence" = AI guessed because description was unclear.
+                      // Show with yellow warning. Empty values fallback to muted.
+                      const isLowConf = item.confidence === "low";
+                      const noSub     = !item.subcategory;
                       return (
                         <div style={{display:"flex",flexDirection:"column",gap:4}}>
                           <select
                             value={item.subcategory || ""}
+                            title={isLowConf ? "⚠ Classificação inferida — confira" : ""}
                             onChange={e=>{
                               onUpdate(group.name,group.jurisdiction,idx,"subcategory",e.target.value);
-                              onUpdate(group.name,group.jurisdiction,idx,"subsubcategory","");  // reset
+                              onUpdate(group.name,group.jurisdiction,idx,"subsubcategory","");
+                              if (isLowConf) onUpdate(group.name,group.jurisdiction,idx,"confidence","high");
                             }}
                             style={{
-                              background: missingSub ? "rgba(224,82,82,.08)" : "transparent",
-                              border: `1px solid ${missingSub ? C.red : C.border}`,
+                              background: noSub ? "rgba(224,82,82,.08)" : (isLowConf ? "rgba(255,193,7,.10)" : "transparent"),
+                              border: `1px solid ${noSub ? C.red : (isLowConf ? "#FFC107" : C.border)}`,
                               borderRadius:4,padding:"4px 6px",
-                              color: missingSub ? C.red : C.text,
+                              color: noSub ? C.red : (isLowConf ? "#B07C00" : C.text),
                               fontSize:10,fontFamily:"'Nunito Sans',sans-serif",
                               width:200,maxWidth:200, cursor:"pointer",
                             }}>
@@ -415,18 +418,25 @@ function GroupTable({group, onUpdate, onAddItem, dragSource, setDragSource, onMo
                           {needsSubsub && (
                             <select
                               value={item.subsubcategory || ""}
-                              onChange={e=>onUpdate(group.name,group.jurisdiction,idx,"subsubcategory",e.target.value)}
+                              title={isLowConf ? "⚠ Classificação inferida — confira" : ""}
+                              onChange={e=>{
+                                onUpdate(group.name,group.jurisdiction,idx,"subsubcategory",e.target.value);
+                                if (isLowConf) onUpdate(group.name,group.jurisdiction,idx,"confidence","high");
+                              }}
                               style={{
-                                background: missingSubsub ? "rgba(224,82,82,.08)" : "transparent",
-                                border: `1px solid ${missingSubsub ? C.red : C.border}`,
+                                background: isLowConf ? "rgba(255,193,7,.10)" : "transparent",
+                                border: `1px solid ${isLowConf ? "#FFC107" : C.border}`,
                                 borderRadius:4,padding:"4px 6px",
-                                color: missingSubsub ? C.red : C.muted,
+                                color: isLowConf ? "#B07C00" : C.muted,
                                 fontSize:10,fontFamily:"'Nunito Sans',sans-serif",
                                 width:200,maxWidth:200, cursor:"pointer",
                               }}>
                               <option value="">— instrumento —</option>
                               {subsubs.map(s => <option key={s} value={s}>{s}</option>)}
                             </select>
+                          )}
+                          {isLowConf && (
+                            <span style={{fontSize:9,color:"#B07C00",fontStyle:"italic"}}>⚠ Verificar</span>
                           )}
                         </div>
                       );
@@ -869,25 +879,10 @@ function App(){
     </div>
   );
 
-  // Count items missing required classification (subcategory + optionally subsubcategory)
-  const nMissingSubAll = (data?.groups||[]).reduce((a, g) => {
-    const subs = subcategoriesFor(g.name);
-    if (!subs) return a;
-    return a + g.items.filter(i => {
-      if (!i.subcategory) return true;
-      const needsSubsub = subsubcategoriesFor(g.name, i.subcategory).length > 0;
-      return needsSubsub && !i.subsubcategory;
-    }).length;
-  }, 0);
-
-  // Also debts must be classified
-  const nMissingDebt = (data?.debts||[]).filter(d => {
-    if (!d.subcategory) return true;
-    const subs = DEBT_TAXONOMY[d.subcategory] || [];
-    return subs.length > 0 && !d.subsubcategory;
-  }).length;
-
-  const nMissingTotal = nMissingSubAll + nMissingDebt;
+  // Count items the AI flagged as low-confidence (it guessed the classification)
+  const nLowConfidence = (data?.groups||[]).reduce((a, g) => {
+    return a + (g.items||[]).filter(i => i.confidence === "low").length;
+  }, 0) + (data?.debts||[]).filter(d => d.confidence === "low").length;
 
   if(step==="verify")return(
     <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Nunito Sans',sans-serif",color:C.text,padding:"24px 20px"}} className="fi">
@@ -928,17 +923,16 @@ function App(){
             </button>
             <button className="gh" style={{background:"transparent",color:C.muted,padding:"10px 18px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:12}} onClick={()=>setStep("upload")}>← Voltar</button>
             <button className="bg"
-              disabled={nMissingTotal > 0}
-              title={nMissingTotal > 0 ? `${nMissingTotal} item${nMissingTotal>1?"s":""} sem subcategoria — classifique antes de gerar` : "Confirmar e gerar arquivos"}
+              title={nLowConfidence > 0 ? `${nLowConfidence} item${nLowConfidence>1?"s":""} com classificação inferida — você pode confirmar mesmo assim ou revisar antes` : "Confirmar e gerar arquivos"}
               style={{
-                background: nMissingTotal > 0 ? C.border : C.gold,
-                color: nMissingTotal > 0 ? C.muted : "#080C14",
+                background: C.gold,
+                color: "#080C14",
                 padding:"10px 22px",borderRadius:8,border:"none",
-                cursor: nMissingTotal > 0 ? "not-allowed" : "pointer",
+                cursor: "pointer",
                 fontFamily:"'Nunito Sans',sans-serif",fontWeight:700,fontSize:13,letterSpacing:"0.04em",
               }}
-              onClick={()=>nMissingSubAll === 0 && confirm()}>
-              {nMissingTotal > 0 ? `⚠ ${nMissingTotal} sem subcat.` : "✓ Confirmar e Gerar Excel + PPT"}
+              onClick={confirm}>
+              {nLowConfidence > 0 ? `⚠ ${nLowConfidence} a verificar · ✓ Gerar` : "✓ Confirmar e Gerar Excel + PPT"}
             </button>
           </div>
         </div>
@@ -1182,8 +1176,8 @@ function App(){
                         const subs = Object.keys(DEBT_TAXONOMY);
                         const subsubs = d.subcategory && DEBT_TAXONOMY[d.subcategory] || [];
                         const needsSubsub = subsubs.length > 0;
-                        const missingSub = !d.subcategory;
-                        const missingSubsub = needsSubsub && !d.subsubcategory;
+                        const noSub = !d.subcategory;
+                        const isLowConf = d.confidence === "low";
                         return (
                           <tr key={d.id||idx} className="rh" style={{borderTop:`1px solid ${C.border}`}}>
                             <td style={{padding:"9px 12px",color:C.muted,fontSize:10,width:32,verticalAlign:"top"}}>{d.id}</td>
@@ -1197,20 +1191,23 @@ function App(){
                               <div style={{display:"flex",flexDirection:"column",gap:4}}>
                                 <select
                                   value={d.subcategory || ""}
-                                  onChange={e=>{ updateDebt(idx,"subcategory",e.target.value); updateDebt(idx,"subsubcategory",""); }}
-                                  style={{background: missingSub?"rgba(224,82,82,.08)":"transparent",border:`1px solid ${missingSub?C.red:C.border}`,borderRadius:4,padding:"4px 6px",color:missingSub?C.red:C.text,fontSize:10,fontFamily:"'Nunito Sans',sans-serif",width:200,cursor:"pointer"}}>
+                                  title={isLowConf ? "⚠ Classificação inferida — confira" : ""}
+                                  onChange={e=>{ updateDebt(idx,"subcategory",e.target.value); updateDebt(idx,"subsubcategory",""); if(isLowConf) updateDebt(idx,"confidence","high"); }}
+                                  style={{background: noSub?"rgba(224,82,82,.08)":(isLowConf?"rgba(255,193,7,.10)":"transparent"),border:`1px solid ${noSub?C.red:(isLowConf?"#FFC107":C.border)}`,borderRadius:4,padding:"4px 6px",color:noSub?C.red:(isLowConf?"#B07C00":C.text),fontSize:10,fontFamily:"'Nunito Sans',sans-serif",width:200,cursor:"pointer"}}>
                                   <option value="">— subcategoria —</option>
                                   {subs.map(s => <option key={s} value={s}>{s}</option>)}
                                 </select>
                                 {needsSubsub && (
                                   <select
                                     value={d.subsubcategory || ""}
-                                    onChange={e=>updateDebt(idx,"subsubcategory",e.target.value)}
-                                    style={{background: missingSubsub?"rgba(224,82,82,.08)":"transparent",border:`1px solid ${missingSubsub?C.red:C.border}`,borderRadius:4,padding:"4px 6px",color:missingSubsub?C.red:C.muted,fontSize:10,fontFamily:"'Nunito Sans',sans-serif",width:200,cursor:"pointer"}}>
+                                    title={isLowConf ? "⚠ Classificação inferida — confira" : ""}
+                                    onChange={e=>{ updateDebt(idx,"subsubcategory",e.target.value); if(isLowConf) updateDebt(idx,"confidence","high"); }}
+                                    style={{background:isLowConf?"rgba(255,193,7,.10)":"transparent",border:`1px solid ${isLowConf?"#FFC107":C.border}`,borderRadius:4,padding:"4px 6px",color:isLowConf?"#B07C00":C.muted,fontSize:10,fontFamily:"'Nunito Sans',sans-serif",width:200,cursor:"pointer"}}>
                                     <option value="">— instrumento —</option>
                                     {subsubs.map(s => <option key={s} value={s}>{s}</option>)}
                                   </select>
                                 )}
+                                {isLowConf && <span style={{fontSize:9,color:"#B07C00",fontStyle:"italic"}}>⚠ Verificar</span>}
                               </div>
                             </td>
                             <td style={{padding:"9px 12px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:C.red,verticalAlign:"top"}}>
@@ -1261,16 +1258,16 @@ function App(){
         {error&&<div style={{background:"rgba(224,82,82,.1)",border:`1px solid ${C.red}`,borderRadius:8,padding:"12px 16px",color:C.red,fontSize:12,marginBottom:14}}>⚠ {error}</div>}
         <div style={{textAlign:"center",paddingBottom:32}}>
           <button className="bg"
-            disabled={nMissingTotal > 0}
+            title={nLowConfidence > 0 ? `${nLowConfidence} item${nLowConfidence>1?"s":""} com classificação inferida — você pode confirmar mesmo assim ou revisar antes` : "Confirmar e gerar arquivos"}
             style={{
-              background: nMissingTotal > 0 ? C.border : C.gold,
-              color: nMissingTotal > 0 ? C.muted : "#080C14",
+              background: C.gold,
+              color: "#080C14",
               padding:"15px 44px",borderRadius:10,border:"none",
-              cursor: nMissingTotal > 0 ? "not-allowed" : "pointer",
+              cursor: "pointer",
               fontFamily:"'Nunito Sans',sans-serif",fontWeight:700,fontSize:15,letterSpacing:"0.04em",
             }}
-            onClick={()=>nMissingSubAll === 0 && confirm()}>
-            {nMissingTotal > 0 ? `⚠ Classifique ${nMissingTotal} item${nMissingTotal>1?"s":""} antes de gerar` : "✓ Confirmar e Gerar Excel + PPT"}
+            onClick={confirm}>
+            {nLowConfidence > 0 ? `⚠ ${nLowConfidence} a verificar · ✓ Gerar` : "✓ Confirmar e Gerar Excel + PPT"}
           </button>
           <p style={{color:C.dim,fontSize:11,marginTop:10}}>Os arquivos são gerados no chat após confirmação</p>
         </div>
