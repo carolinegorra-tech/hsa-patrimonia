@@ -490,17 +490,44 @@ function App(){
         {/* Jurisdiction tabs (Brasil / Offshore) */}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
           {[
-            {key:"Brasil",   label:"🇧🇷 Brasil",   accent:C.green, total:brl(brGrps.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dirpf||0),0),0)), n:brGrps.length, items:brGrps.reduce((a,g)=>a+g.items.length,0)},
-            {key:"Offshore", label:"🌐 Offshore", accent:C.gold,  total:(()=>{const t=offGrps.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dcbe||0),0),0); return t>0?usd(t):"N/A";})(), n:offGrps.length, items:offGrps.reduce((a,g)=>a+g.items.length,0)},
-          ].map(({key,label,accent,total,n,items}) => {
+            {
+              key:"Brasil", label:"🇧🇷 Brasil", accent:C.green,
+              total: brl(brGrps.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dirpf||0),0),0)),
+              n: brGrps.length,
+              items: brGrps.reduce((a,g)=>a+g.items.length,0),
+              // Count unique states/cities from item.loc
+              locs: (()=>{
+                const counts={};
+                brGrps.forEach(g=>g.items.forEach(i=>{
+                  if(i.loc){const k=i.loc.toString().trim(); counts[k]=(counts[k]||0)+1;}
+                }));
+                return counts;
+              })(),
+            },
+            {
+              key:"Offshore", label:"🌐 Offshore", accent:C.gold,
+              total: (()=>{const t=offGrps.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dcbe||0),0),0); return t>0?usd(t):"N/A";})(),
+              n: offGrps.length,
+              items: offGrps.reduce((a,g)=>a+g.items.length,0),
+              // Count unique countries from item.loc
+              locs: (()=>{
+                const counts={};
+                offGrps.forEach(g=>g.items.forEach(i=>{
+                  if(i.loc){const k=i.loc.toString().trim(); counts[k]=(counts[k]||0)+1;}
+                }));
+                return counts;
+              })(),
+            },
+          ].map(({key,label,accent,total,n,items,locs}) => {
             const isActive = activeJuris === key;
             const disabled = n === 0;
+            const locEntries = Object.entries(locs).sort((a,b)=>b[1]-a[1]);
             return (
               <button key={key}
                 disabled={disabled}
                 onClick={()=>!disabled && setActiveJuris(key)}
                 style={{
-                  background: isActive ? "rgba(60,174,122,.06)" : C.card,
+                  background: isActive ? (key==="Brasil" ? "rgba(60,174,122,.06)" : "rgba(191,148,71,.06)") : C.card,
                   border: `1.5px solid ${isActive ? accent : C.border}`,
                   borderRadius: 10,
                   padding: "14px 18px",
@@ -508,16 +535,34 @@ function App(){
                   textAlign: "left",
                   fontFamily: "'Nunito Sans',sans-serif",
                   opacity: disabled ? 0.4 : 1,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: 12,
+                  width: "100%",
                 }}>
-                <div>
-                  <p style={{color:isActive?accent:C.text,fontSize:14,fontWeight:700,marginBottom:3}}>{label}</p>
-                  <p style={{color:C.muted,fontSize:10}}>{n} categorias · {items} itens</p>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom: locEntries.length>0 ? 10 : 0}}>
+                  <div>
+                    <p style={{color:isActive?accent:C.text,fontSize:14,fontWeight:700,marginBottom:3}}>{label}</p>
+                    <p style={{color:C.muted,fontSize:10}}>{n} categorias · {items} {items===1?"item":"itens"}</p>
+                  </div>
+                  <p style={{color:isActive?accent:C.text,fontSize:14,fontFamily:"'Cormorant Garamond',serif",fontWeight:600,whiteSpace:"nowrap",marginLeft:12}}>{total}</p>
                 </div>
-                <p style={{color:isActive?accent:C.text,fontSize:14,fontFamily:"'Cormorant Garamond',serif",fontWeight:600,whiteSpace:"nowrap"}}>{total}</p>
+                {/* Country/location breakdown pills */}
+                {locEntries.length > 0 && (
+                  <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                    {locEntries.map(([loc,cnt])=>(
+                      <span key={loc} style={{
+                        background: isActive ? (key==="Brasil"?"rgba(60,174,122,.12)":"rgba(191,148,71,.12)") : "rgba(142,149,155,.1)",
+                        color: isActive ? accent : C.muted,
+                        border: `1px solid ${isActive ? accent+"44" : C.border}`,
+                        borderRadius: 999,
+                        padding: "3px 9px",
+                        fontSize: 10,
+                        fontWeight: 600,
+                        whiteSpace: "nowrap",
+                      }}>
+                        {loc}{cnt>1?` · ${cnt}`:""}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </button>
             );
           })}
