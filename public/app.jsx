@@ -31,56 +31,45 @@ const usd = v => v > 0 ? "US$ "+new Intl.NumberFormat("pt-BR",{minimumFractionDi
 const n = v => v != null && v !== 0 ? new Intl.NumberFormat("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}).format(v) : "—";
 
 const DEMO = {
-  client:"SÉRGIO COUTINHO GALVÃO FILHO", cpf:"***.***.***-**", year:2024,
+  client:"JANE MARGARET DOE", year:2024,
+  spouse:{name:"JOHN ROBERT DOE", marriage_regime:"Comunhão Parcial de Bens", marriage_date:"08/04/2003"},
+  dependents:[
+    {name:"OLIVIA MARIA DOE", birth_date:"12/09/2006", relationship:"Filha(o)"},
+    {name:"LUCAS HENRIQUE DOE", birth_date:"27/04/2010", relationship:"Filha(o)"},
+  ],
   groups:[
-    {name:"Imóveis",jurisdiction:"Brasil",items:[
-      {id:3,desc:"Apartamento São Conrado",loc:"Rio de Janeiro, RJ",dirpf:11897122.05,dcbe:null},
-      {id:9,desc:"Casa e terreno Pacaembu",loc:"São Paulo, SP",dirpf:7237937.02,dcbe:null},
-      {id:12,desc:"Casa Quinta da Baronesa",loc:"Bragança Paulista, SP",dirpf:10990000,dcbe:null},
-      {id:11,desc:"Casa Juquey",loc:"São Sebastião, SP",dirpf:6924403,dcbe:null},
+    {name:"Bens Imóveis", jurisdiction:"Brasil", items:[
+      {id:1, desc:"Apartamento 280m² Rua dos Pinheiros 1428 ap 502", loc:"São Paulo, SP", dirpf:9200000, dcbe:null, comments:""},
+      {id:2, desc:"Casa de campo 450m² Itu SP", loc:"Itu, SP", dirpf:2480000, dcbe:null, comments:""},
+      {id:3, desc:"Apartamento 95m² Copacabana", loc:"Rio de Janeiro, RJ", dirpf:1500000, dcbe:null, comments:""},
     ]},
-    {name:"Obras de Arte",jurisdiction:"Brasil",items:[
-      {id:29,desc:"Quadro Grafisme en Noir et Rouge",loc:"Brasil",dirpf:4826178,dcbe:null},
-      {id:33,desc:"Obra Relief 373",loc:"Brasil",dirpf:5284853.6,dcbe:null},
-      {id:34,desc:"Obra Antonio Bandeira",loc:"Brasil",dirpf:4000000,dcbe:null},
+    {name:"Bens Móveis / Obras de Arte", jurisdiction:"Brasil", items:[
+      {id:4, desc:"Veículos e joias", loc:"Brasil", dirpf:1840000, dcbe:null, comments:""},
     ]},
-    {name:"Ações",jurisdiction:"Brasil",items:[
-      {id:42,desc:"13.531.814 ações Raia Drogasil S.A.",loc:"Brasil",dirpf:27457756.33,dcbe:null},
-      {id:41,desc:"100.540 ações Klabin S.A. (KLBN11)",loc:"Brasil",dirpf:3784445.22,dcbe:null},
+    {name:"Participações Societárias", jurisdiction:"Brasil", items:[
+      {id:5, desc:"Cotas empresa operacional", loc:"Brasil", dirpf:45220000, dcbe:null, comments:""},
     ]},
-    {name:"Participações Societárias",jurisdiction:"Brasil",items:[
-      {id:45,desc:"XXXXX Inv. e Part. Ltda.",loc:"Brasil",dirpf:125209973.97,dcbe:null},
-      {id:46,desc:"XXXXXXX Holdings S.A.",loc:"Brasil",dirpf:29309104.88,dcbe:null},
-      {id:44,desc:"XXXXX Investimentos Ltda.",loc:"Brasil",dirpf:11526046.5,dcbe:null},
+    {name:"Aplicações e Investimentos", jurisdiction:"Brasil", items:[
+      {id:6, desc:"CDB / Fundos / Renda Fixa", loc:"Brasil", dirpf:17650000, dcbe:null, comments:""},
     ]},
-    {name:"Fundos de Investimento",jurisdiction:"Brasil",items:[
-      {id:65,desc:"Araucária Investimento no Exterior FIM",loc:"Brasil",dirpf:28210793.95,dcbe:null},
-      {id:70,desc:"Araucária Segundo FIA Ações",loc:"Brasil",dirpf:27328813.06,dcbe:null},
+    {name:"Créditos e Direitos", jurisdiction:"Brasil", items:[
+      {id:7, desc:"Créditos a receber", loc:"Brasil", dirpf:2350000, dcbe:null, comments:""},
     ]},
-    {name:"Investimentos Renda Fixa",jurisdiction:"Brasil",items:[
-      {id:57,desc:"CDB Banco BTG Pactual S.A.",loc:"Brasil",dirpf:3752587.99,dcbe:null},
-      {id:60,desc:"LCI XP Investimentos CCTVM S.A.",loc:"Brasil",dirpf:1372391.81,dcbe:null},
+    {name:"Contas Bancárias", jurisdiction:"Brasil", items:[
+      {id:8, desc:"Conta Corrente / Poupança", loc:"Brasil", dirpf:612400, dcbe:null, comments:""},
     ]},
-    {name:"Contas Bancárias",jurisdiction:"Brasil",items:[
-      {id:84,desc:"Conta Corrente Itaú Unibanco S.A.",loc:"Brasil",dirpf:529310.48,dcbe:null},
-      {id:85,desc:"Conta Corrente Banco C6 S.A.",loc:"Brasil",dirpf:49453.46,dcbe:null},
+    {name:"Participações no Capital de Empresas no Exterior", jurisdiction:"Offshore", items:[
+      {id:9, desc:"DOE FAMILY HOLDINGS LTD. (100%)", loc:"Ilhas Cayman", dirpf:null, dcbe:3420000, comments:""},
+      {id:10, desc:"JD INVESTMENTS LLC (70%)", loc:"Delaware, EUA", dirpf:null, dcbe:1580000, comments:""},
     ]},
-    {name:"Créditos",jurisdiction:"Brasil",items:[
-      {id:88,desc:"Créditos a receber L Inv. e Part. EIRELI",loc:"Brasil",dirpf:2514810.4,dcbe:null},
-      {id:53,desc:"AFAC L Galpões Investimentos Ltda.",loc:"Brasil",dirpf:1900000,dcbe:null},
+    {name:"Depósitos em Contas Bancárias no Exterior", jurisdiction:"Offshore", items:[
+      {id:11, desc:"Citibank Private Bank", loc:"EUA", dirpf:null, dcbe:584300, comments:""},
+      {id:12, desc:"Banco Santander Internacional", loc:"EUA", dirpf:null, dcbe:218700, comments:""},
+      {id:13, desc:"HSBC Jersey", loc:"Ilha de Jersey", dirpf:null, dcbe:142500, comments:""},
     ]},
-    {name:"Participações Societárias",jurisdiction:"Offshore",items:[
-      {id:107,desc:"XXXXXXXX Ltd. (100%)",loc:"Bahamas",dirpf:44656048.98,dcbe:12188023},
-      {id:104,desc:"XXXXXXXX Limited (100%)",loc:"Bahamas",dirpf:14633402.63,dcbe:9949412},
-    ]},
-    {name:"Contas Bancárias",jurisdiction:"Offshore",items:[
-      {id:116,desc:"Conta Corrente e Poupança Santander Totta",loc:"Portugal",dirpf:6700188.3,dcbe:1041000},
-      {id:113,desc:"Conta Corrente JP Morgan Chase Bank (EUR)",loc:"EUA",dirpf:1769145.78,dcbe:274870},
-    ]},
-    {name:"Seguros de Vida",jurisdiction:"Offshore",items:[
-      {id:118,desc:"Seguro de vida Zurich Life Insurance (1)",loc:"Suíça",dirpf:929670,dcbe:350000},
-      {id:119,desc:"Seguro de vida Zurich Life Insurance (2)",loc:"Suíça",dirpf:929670,dcbe:350000},
-    ]},
+  ],
+  debts:[
+    {id:1, desc:"Financiamento imobiliário — Banco Itaú Unibanco S.A.", value:1620000},
   ],
 };
 
