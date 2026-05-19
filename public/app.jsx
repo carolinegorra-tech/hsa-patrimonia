@@ -392,7 +392,20 @@ function App(){
     setTimeout(()=>setActiveCat(juris==="Brasil"?"Outros Ativos":"Outros Ativos no Exterior"),50);
   };
 
-  const totDIRPF=data?.groups?.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dirpf||0),0),0)||0;
+  const updateDebt = (idx, field, value) => {
+    setData(prev => {
+      const debts = (prev.debts||[]).map((d,i)=>i===idx?{...d,[field]:value}:d);
+      return {...prev, debts};
+    });
+  };
+
+  const addDebt = () => {
+    setData(prev => {
+      const id = ((prev.debts||[]).reduce((a,d)=>Math.max(a,d.id||0),0))+1;
+      return {...prev, debts:[...(prev.debts||[]), {id, desc:"", value:null}]};
+    });
+  };
+
   const totDCBE=data?.groups?.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dcbe||0),0),0)||0;
   const nItems=data?.groups?.reduce((a,g)=>a+g.items.length,0)||0;
   const brGrps=data?.groups?.filter(g=>g.jurisdiction==="Brasil")||[];
@@ -713,13 +726,91 @@ function App(){
           </div>
         )}
 
-        <div style={{background:C.card,border:`1px solid ${C.borderLight}`,borderRadius:10,padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
-          <span style={{fontWeight:700,fontSize:13,color:C.muted,letterSpacing:"0.1em"}}>TOTAL GERAL</span>
-          <div style={{display:"flex",gap:24,alignItems:"center"}}>
-            {totDCBE>0&&<span style={{color:C.gold,fontSize:14,fontFamily:"'Cormorant Garamond',serif",fontWeight:600}}>{usd(totDCBE)}</span>}
-            <span style={{color:C.text,fontSize:22,fontFamily:"'Cormorant Garamond',serif",fontWeight:700}}>{brl(totDIRPF)}</span>
-          </div>
-        </div>
+        {/* ── Dívidas e Ônus Reais ──────────────────────────────────────── */}
+        {(() => {
+          const debts = data?.debts || [];
+          const totDebts = debts.reduce((a,d)=>a+(d.value||0),0);
+          const netWorth = totDIRPF - totDebts;
+          return (
+            <div style={{marginTop:8,marginBottom:16}}>
+              {/* Header */}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <div style={{width:3,height:14,background:C.red,borderRadius:2}}/>
+                  <span style={{color:C.red,fontWeight:700,fontSize:11,letterSpacing:"0.15em"}}>DÍVIDAS E ÔNUS REAIS</span>
+                  <span style={{color:C.muted,fontSize:10}}>(Ficha 8 DIRPF)</span>
+                </div>
+                {totDebts>0&&<span style={{color:C.red,fontFamily:"'Cormorant Garamond',serif",fontSize:15,fontWeight:600}}>− {brl(totDebts)}</span>}
+              </div>
+
+              {debts.length === 0 ? (
+                <div style={{background:C.card,border:`1px dashed ${C.border}`,borderRadius:8,padding:"12px 16px",color:C.muted,fontSize:12,marginBottom:8}}>
+                  Nenhuma dívida declarada.
+                </div>
+              ) : (
+                <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden",marginBottom:8}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                    <thead>
+                      <tr style={{background:C.surface}}>
+                        {["#","Descrição da Dívida / Credor","Valor (R$)",""].map((h,i)=>(
+                          <th key={i} style={{padding:"7px 12px",color:C.muted,fontWeight:600,fontSize:10,letterSpacing:"0.08em",textTransform:"uppercase",textAlign:i>=2?"right":"left",whiteSpace:"nowrap"}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {debts.map((d,idx)=>(
+                        <tr key={d.id||idx} className="rh" style={{borderTop:`1px solid ${C.border}`}}>
+                          <td style={{padding:"9px 12px",color:C.muted,fontSize:10,width:32}}>{d.id}</td>
+                          <td style={{padding:"9px 12px",color:C.text}}>
+                            {d.desc===''||d.desc==null
+                              ? <input defaultValue="" placeholder="Ex: Financiamento Bradesco" onBlur={e=>updateDebt(idx,"desc",e.target.value)}
+                                  style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,padding:"3px 7px",color:C.text,fontSize:11,fontFamily:"'Nunito Sans',sans-serif",width:"100%"}}/>
+                              : d.desc}
+                          </td>
+                          <td style={{padding:"9px 12px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:C.red}}>
+                            <EditCell value={d.value} onChange={v=>updateDebt(idx,"value",v)}/>
+                          </td>
+                          <td style={{padding:"9px 8px",width:32}}/>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{background:C.surface,borderTop:`1px solid ${C.borderLight}`}}>
+                        <td colSpan={2} style={{padding:"9px 12px",color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.1em"}}>TOTAL DÍVIDAS</td>
+                        <td style={{padding:"9px 12px",color:C.red,textAlign:"right",fontFamily:"monospace",fontWeight:700,fontSize:12}}>{totDebts>0?`− ${n(totDebts)}`:"—"}</td>
+                        <td/>
+                      </tr>
+                    </tfoot>
+                  </table>
+                  <div style={{padding:"8px 18px",borderTop:`1px dashed ${C.border}`}}>
+                    <button onClick={addDebt}
+                      style={{background:"transparent",color:C.muted,border:"none",cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",gap:5,padding:0}}>
+                      <span style={{fontSize:15,lineHeight:1}}>+</span> Adicionar dívida
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Net Worth card */}
+              <div style={{
+                background: totDebts>0 ? "rgba(32,60,92,.06)" : C.card,
+                border: `1.5px solid ${totDebts>0 ? C.blue : C.borderLight}`,
+                borderRadius:10, padding:"16px 20px",
+                display:"flex", justifyContent:"space-between", alignItems:"center",
+              }}>
+                <div>
+                  <p style={{color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.15em",marginBottom:4}}>PATRIMÔNIO LÍQUIDO</p>
+                  <p style={{color:C.dim,fontSize:10}}>Total ativos{totDebts>0?" − dívidas":""}</p>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <p style={{color:C.text,fontSize:24,fontFamily:"'Cormorant Garamond',serif",fontWeight:700}}>{brl(netWorth)}</p>
+                  {totDCBE>0&&<p style={{color:C.gold,fontSize:12,marginTop:2}}>{usd(totDCBE)} offshore</p>}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {error&&<div style={{background:"rgba(224,82,82,.1)",border:`1px solid ${C.red}`,borderRadius:8,padding:"12px 16px",color:C.red,fontSize:12,marginBottom:14}}>⚠ {error}</div>}
         <div style={{textAlign:"center",paddingBottom:32}}>
           <button className="bg" style={{background:C.gold,color:"#080C14",padding:"15px 44px",borderRadius:10,border:"none",cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontWeight:700,fontSize:15,letterSpacing:"0.04em"}} onClick={confirm}>✓ Confirmar e Gerar Excel + PPT</button>
