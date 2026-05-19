@@ -19856,7 +19856,7 @@ REF_TEMPLATE = _ensure_template()
 
 # ── Palette ───────────────────────────────────────────────────────────────────
 NAVY     = RGBColor(0x28,0x39,0x44)
-LIME     = RGBColor(0xE4,0xE5,0x1F)
+LIME     = RGBColor(0xD4,0xE1,0x42)
 GRAY_MED = RGBColor(0x8E,0x95,0x9B)
 GRAY_LT  = RGBColor(0xBE,0xC2,0xC6)
 WHITE    = RGBColor(0xFF,0xFF,0xFF)
@@ -19878,35 +19878,20 @@ def aggregate(data):
     """Returns dict with everything the deck needs."""
     groups = data.get('groups', [])
 
-    # For the PPT, we collapse Previdência + Cripto + Equity into a single
-    # "Outros (Previdência, Cripto, Equity)" bucket so we don't blow past the
-    # 6-slot grid. These show up separately in the Excel and verify screen.
-    OUTROS_GROUPS = {
-        'Previdência Privada',
-        'Criptoativos',
-        'Remuneração Variável em Equity',
-    }
-    OUTROS_LABEL = 'Outros (Previdência, Cripto, Equity)'
-
-    def _bucket_name(name):
-        return OUTROS_LABEL if name in OUTROS_GROUPS else name
-
-    # Brasil: sum dirpf per group-name (after bucketing)
+    # Brasil: sum dirpf per group-name
     br_agg = {}
     for g in groups:
         if g.get('jurisdiction') == 'Brasil':
             tot = sum((it.get('dirpf') or 0) for it in g['items'])
-            key = _bucket_name(g['name'])
-            br_agg[key] = br_agg.get(key, 0) + tot
+            br_agg[g['name']] = br_agg.get(g['name'], 0) + tot
     br_sorted = sorted(br_agg.items(), key=lambda kv: -kv[1])
 
-    # Offshore: sum dcbe per group-name (after bucketing)
+    # Offshore: sum dcbe per group-name
     off_agg = {}
     for g in groups:
         if g.get('jurisdiction') == 'Offshore':
             tot = sum((it.get('dcbe') or 0) for it in g['items'])
-            key = _bucket_name(g['name'])
-            off_agg[key] = off_agg.get(key, 0) + tot
+            off_agg[g['name']] = off_agg.get(g['name'], 0) + tot
     off_sorted = sorted(off_agg.items(), key=lambda kv: -kv[1])
 
     total_br  = sum(v for _, v in br_sorted)
@@ -20524,10 +20509,8 @@ def icon_frame(sl, cx, cy, sz=200_000, col=None):
 def icon_shield(sl, cx, cy, sz=200_000, col=None):
     col = col or NAVY
     w = int(sz*0.78); h = sz
-    # PENTAGON shape (5-sided, points up) — used as shield. HOME_PLATE was
-    # the prior choice but it's missing in some python-pptx builds. Pentagon
-    # is universally available and reads as a shield/badge.
-    _ish(sl, _MS.PENTAGON, cx-w//2, cy-h//2, w, h, fill=col)
+    # HOMEPLATE shape points downward — perfect for shield
+    _ish(sl, _MS.HOME_PLATE, cx-w//2, cy-h//2, w, h, fill=col)
     # tiny white check
     T(sl,'✓',cx-w//2, cy-h//2+15_000, w, h,
       pt=int(sz/13_000), bold=True, col=WHITE, align='center', font='Gotham SSm Bold')
@@ -20647,20 +20630,7 @@ def build_deck(data, output_path):
 
     prs = Presentation(output_path)
 
-    # ── Fix slide number style on all slides (TextBox 13) ────────────────────
-    # Template has it bold + inherited color. We want: Gotham SSm Black, NOT
-    # bold, grey (#8E959B), 9pt — matching the reference screenshot.
-    for sl in prs.slides:
-        for sh in sl.shapes:
-            if sh.name == 'TextBox 13' and hasattr(sh, 'text_frame'):
-                for para in sh.text_frame.paragraphs:
-                    for run in para.runs:
-                        run.font.name  = 'Gotham SSm Black'
-                        run.font.bold  = False
-                        run.font.size  = Pt(11.7)
-                        run.font.color.rgb = GRAY_MED
-                break
-
+    # ── helper: text replace ─────────────────────────────────────────────────
     def rep(slide, old, new):
         for sh in slide.shapes:
             if hasattr(sh,'text_frame') and old in sh.text:
@@ -20710,6 +20680,23 @@ def build_deck(data, output_path):
         rep(s2, CG_VALS[cg_idx], slots[cg_idx]['val_str'])
         rep(s2, CG_PCTS[cg_idx], slots[cg_idx]['pct_str'])
     rep(s2, 'R$ 50.3M', BR_TOTAL_STR)
+
+    # FIX #12b: also replace the NEW template's hardcoded sample values.
+    # The Carol G strings above ('R$ 23.7M', 'PART. SOCIETÁRIAS', etc.) don't
+    # exist in the redesigned template — its placeholders use different
+    # values and full names. rep() returns early on no-match, so adding these
+    # fallback patterns is safe for the old template too.
+    NEW_LBL_UPPER = ['PARTICIPAÇÕES SOCIETÁRIAS','APLICAÇÕES E INVESTIMENTOS',
+                     'BENS IMÓVEIS','CRÉDITOS E DIREITOS','BENS MÓVEIS',
+                     'CONTAS BANCÁRIAS E SALDOS']
+    NEW_VALS = ['R$ 45.2M','R$ 17.6M','R$ 13.2M','R$ 2.4M','R$ 1.8M','R$ 612K']
+    NEW_PCTS = ['(55.9%)','(21.8%)','(16.3%)','(2.9%)','(2.3%)','(0.8%)']
+    for cg_idx in sorted(range(6), key=lambda k: -len(NEW_LBL_UPPER[k])):
+        rep(s2, NEW_LBL_UPPER[cg_idx], slots[cg_idx]['name'].upper())
+    for cg_idx in range(6):
+        rep(s2, NEW_VALS[cg_idx], slots[cg_idx]['val_str'])
+        rep(s2, NEW_PCTS[cg_idx], f"({slots[cg_idx]['pct_str']})")
+    rep(s2, 'R$ 80.9M', BR_TOTAL_STR)
 
     # FIX #1: the template highlights row 2 with lime (Rectangle 458 = D4E142).
     # That highlight is arbitrary per-client noise — normalise row 2 to the
@@ -20788,20 +20775,28 @@ def build_deck(data, output_path):
     ]
     by_name = {sh.name: sh for sh in s2.shapes}
 
-    # Hide empty slots (val == 0) — make the rect background transparent and
-    # set all text to white so nothing shows. Keeps geometry intact.
-    for i, rect_name in enumerate(ROW_RECTS):
-        if slots[i]['val'] == 0:
-            rect = by_name.get(rect_name)
-            if rect is not None:
-                rect.fill.background()
-                rect.line.fill.background()
-            for tb_name in ROW_TBOXES[i]:
-                tb = by_name.get(tb_name)
-                if tb is not None:
-                    for para in tb.text_frame.paragraphs:
-                        for run in para.runs:
-                            run.font.color.rgb = WHITE
+    # ─────────────────────────────────────────────────────────────────────────
+    # FIX #12: detect template version and route layout fixes accordingly.
+    #
+    #   OLD layout (Carol G template) → 6-row value table on the RIGHT
+    #   (Rectangle 454/458/.../478, TextBox 455-480) + pie on the left. The
+    #   block below (FIX #5/#7/#8/#10) was written for this layout.
+    #
+    #   NEW layout (redesigned slide 2) → six callouts placed AROUND a TOTAL
+    #   oval, with the pie chart meant to sit BEHIND the oval (donut effect).
+    #   The template already ships Connector 8/13/17 (leftside) and 22/26/30
+    #   (rightside) pre-positioned to fan from each callout's inner edge to
+    #   the centred pie. None of the old shape names exist here, so most of
+    #   the FIX block silently no-ops — EXCEPT the unconditional pie left-
+    #   shift below, which pushes the chart off-design and makes its bounding
+    #   box overlap the leftside callouts. Symptom: "PARTICIPAÇÕES
+    #   SOCIETÁRIAS / R$ X.XM" rendered on top of dark pie slices, illegible.
+    #
+    # The fix: only run the legacy left-shift on the old layout; on the new
+    # layout, centre the pie on the TOTAL oval's centre point. Old behaviour
+    # is preserved bit-for-bit when Rectangle 454 is present.
+    # ─────────────────────────────────────────────────────────────────────────
+    HAS_OLD_LAYOUT = 'Rectangle 454' in by_name
 
     # FIX #5: rebalance slide 2 layout — pie was left-skewed and value table
     # was off-centre on the right half. Shift both toward slide centre.
@@ -20812,10 +20807,23 @@ def build_deck(data, output_path):
     RECT_SHIFT_X = 350_000   # value table moves right modestly (keeps 480 on slide)
 
     # Move pie chart
-    for sh in s2.shapes:
-        if sh.has_chart:
-            sh.left = Emu(sh.left + PIE_SHIFT_X)
-            break
+    if HAS_OLD_LAYOUT:
+        for sh in s2.shapes:
+            if sh.has_chart:
+                sh.left = Emu(sh.left + PIE_SHIFT_X)
+                break
+    else:
+        # NEW layout: centre the chart on the TOTAL oval (Oval 6 at
+        # x=5_364_480 w=1_463_040 → centre 6_096_000; y=2_743_200 h=1_463_040
+        # → centre 3_474_720). Connectors are already drawn from each
+        # callout's inner edge to where the centred pie's outer ring will be,
+        # so this single move is enough to fix the layout.
+        TOTAL_CX, TOTAL_CY = 6_096_000, 3_474_720
+        for sh in s2.shapes:
+            if sh.has_chart:
+                sh.left = Emu(TOTAL_CX - sh.width  // 2)
+                sh.top  = Emu(TOTAL_CY - sh.height // 2)
+                break
 
     # Shift all row rects + their 3 textboxes + TOTAL bar/labels
     SHIFT_SHAPES = (
@@ -20881,18 +20889,16 @@ def build_deck(data, output_path):
                 for run in para.runs:
                     run.font.size = Pt(12)
 
-    # TOTAL bar: thinner now (was 876_000 EMU, looked too thick). We compensate
-    # by adding a bigger gap above it so the table's overall bottom (and the
-    # pie's bottom) stays at the same y as before — keeping pie ↔ table aligned.
+    # TOTAL bar: sits just below the last row. Made taller so table bottom
+    # aligns with the extended pie chart bottom (see FIX #8).
     total_rect = by_name.get(TOTAL_RECT)
     if total_rect is not None:
-        NEW_TOTAL_H   = 500_000          # was 876_000 — slimmer
-        EXTRA_GAP     = 446_000          # absorb the height we removed (876-500+70=446)
-        new_total_top = FIRST_TOP + 5*STRIDE + NEW_ROW_H + EXTRA_GAP
+        new_total_top = FIRST_TOP + 5*STRIDE + NEW_ROW_H + 70_000
+        NEW_TOTAL_H = 876_000           # was 566_928 — taller to match pie extent
         total_rect.top = Emu(new_total_top)
         total_rect.height = Emu(NEW_TOTAL_H)
         total_h = NEW_TOTAL_H
-        # centre the TOTAL GERAL label + value vertically inside the slimmer bar
+        # move the TOTAL GERAL label + value to the new bar's vertical centre
         bar_mid = new_total_top + total_h//2
         tb479 = by_name.get('TextBox 479')   # "TOTAL GERAL"
         tb480 = by_name.get('TextBox 480')   # value
@@ -20902,7 +20908,7 @@ def build_deck(data, output_path):
             tb480.top = Emu(bar_mid - 210_000)
 
         # FIX #8: align the pie chart vertically with the value table —
-        # same top, same bottom. Bottom is the bottom of the TOTAL bar.
+        # same top, same bottom, balanced side-by-side proportions.
         TABLE_TOP    = FIRST_TOP
         TABLE_BOTTOM = new_total_top + total_h
         for sh in s2.shapes:
@@ -20920,27 +20926,6 @@ def build_deck(data, output_path):
         rep(s3, CG_VALS[cg_idx], slots[cg_idx]['val_str'])
         rep(s3, CG_PCTS[cg_idx], slots[cg_idx]['pct_str'])
     rep(s3, 'R$ 50.3M', BR_TOTAL_STR)
-
-    # Hide KPI cards on slide 3 for empty slots (val == 0) —
-    # The 6 KPI rectangles in the template are named 'Rectangle 484..489'
-    # (or similar). We find them by matching the category label text we just
-    # wrote and make them invisible, same technique as slide 2.
-    # Instead of guessing rect names, find ALL textboxes on s3 that contain
-    # the placeholder "—" (which we wrote for empty slots) and hide the
-    # rectangle that overlaps them.
-    s3_by_name = {sh.name: sh for sh in s3.shapes}
-    for cg_idx in range(6):
-        if slots[cg_idx]['val'] == 0:
-            # Make label, value and pct text white (invisible on white background)
-            for placeholder in (CG_LBL_TITLE[cg_idx], CG_VALS[cg_idx], CG_PCTS[cg_idx]):
-                for sh in s3.shapes:
-                    if hasattr(sh, 'text') and sh.text.strip() in ('—', placeholder, slots[cg_idx]['val_str']):
-                        try:
-                            for para in sh.text_frame.paragraphs:
-                                for run in para.runs:
-                                    run.font.color.rgb = WHITE
-                        except Exception:
-                            pass
 
     # ── Slide 4: participações ───────────────────────────────────────────────
     s4 = prs.slides[3]
@@ -20996,24 +20981,12 @@ def build_deck(data, output_path):
         bar = next(sh.chart for sh in s3.shapes if sh.has_chart)
         cd2 = CategoryChartData(); cd2.categories = cats; cd2.add_series('', vals)
         bar.replace_data(cd2)
-        # Blue gradient palette — DARKEST for the largest bar, LIGHTEST for the
-        # smallest. cats come from br_sorted which is DESCENDING (largest at
-        # index 0, smallest at the end). So i=0 → DARK, i=n-1 → LIGHT.
-        n = len(cats)
-        BLUE_DARK  = (32, 60, 92)     # ~ #203c5c — biggest bar
-        BLUE_LIGHT = (158, 188, 222)  # ~ #9ebcde — smallest bar
-        def _lerp(a, b, t): return int(round(a + (b - a) * t))
-        def _hex(rgb): return '{:02X}{:02X}{:02X}'.format(*rgb)
-        gradient = []
-        for i in range(n):
-            t = i / max(1, n - 1)   # largest (i=0) → t=0 → DARK; smallest → t=1 → LIGHT
-            gradient.append(_hex(tuple(_lerp(BLUE_DARK[k], BLUE_LIGHT[k], t) for k in range(3))))
-        recolor_chart(bar, gradient)
+        recolor_chart(bar, ['283944'])           # all bars navy
         # FIX #6: bigger axis category labels (the names beside each bar)
         try:
-            bar.category_axis.tick_labels.font.size = Pt(12)
-            bar.category_axis.tick_labels.font.bold = False
-            bar.category_axis.tick_labels.font.name = 'Gotham SSm Black'
+            bar.category_axis.tick_labels.font.size = Pt(11)
+            bar.category_axis.tick_labels.font.bold = True
+            bar.category_axis.tick_labels.font.name = 'Gotham SSm Bold'
         except Exception: pass
 
     # Slide 4 charts
@@ -21039,9 +21012,9 @@ def build_deck(data, output_path):
         # FIX #6 (cont'd): bigger axis category labels on both s4 charts
         for ch in (br_chart, off_chart):
             try:
-                ch.category_axis.tick_labels.font.size = Pt(12)
-                ch.category_axis.tick_labels.font.bold = False
-                ch.category_axis.tick_labels.font.name = 'Gotham SSm Black'
+                ch.category_axis.tick_labels.font.size = Pt(11)
+                ch.category_axis.tick_labels.font.bold = True
+                ch.category_axis.tick_labels.font.name = 'Gotham SSm Bold'
             except Exception: pass
 
     # ── Slide 5: organograma patrimonial ─────────────────────────────────────
@@ -21065,13 +21038,11 @@ def build_deck(data, output_path):
 
     # FIX #4: Brazil flag as the national-assets hub node
     brazil_flag(s5, CX5, FLAG_CY, w=300_000)
-    # Label below flag — push down enough that the connector line doesn't cross it
-    LABEL_Y = FLAG_CY + 145_000
-    T(s5, "ATIVOS NO BRASIL", CX5-1_500_000, LABEL_Y, 3_000_000, fh(7),
+    T(s5, "ATIVOS NO BRASIL", CX5-1_500_000, FLAG_CY+115_000, 3_000_000, fh(7),
       pt=7, bold=True, col=GRAY_MED, align='center', font='Gotham SSm Bold')
 
     # horizontal distributor — snug below the flag label
-    HDIST_Y = LABEL_Y + fh(7) + 45_000
+    HDIST_Y = FLAG_CY + 115_000 + fh(7) + 45_000
     L(s5, CX5, FLAG_CY+90_000, CX5, HDIST_Y)
 
     # BR boxes — taller, generous internal spacing (no overlap)
@@ -21104,7 +21075,7 @@ def build_deck(data, output_path):
         OBY = BRT+BH+150_000
         OBX = CX5-1_350_000
         R(s5, OBX, OBY, 2_700_000, 360_000, fill=NAVY)
-        T(s5,"OFFSHORE",OBX,OBY,2_700_000,360_000,
+        T(s5,"OFFSHORE",OBX+100_000,OBY+85_000,2_500_000,fh(13),
           pt=13,bold=True,col=WHITE,align='center',font='Gotham SSm Bold')
         L(s5, CX5, BRT+BH, CX5, OBY)
         OFL = OBY+360_000
@@ -21219,23 +21190,6 @@ def build_deck(data, output_path):
         Person(s6,CX6,DY+220_000,sz=230_000,col=GRAY_LT)
         T(s6,"SEM DEPENDENTES",DX+70_000,DY+400_000,DW-140_000,fh(9),
           pt=9,bold=True,col=GRAY_MED,align='center',font='Gotham SSm Bold')
-
-    # ── Remove slide 3 (DETALHAMENTO DOS ATIVOS — bar chart) ─────────────────
-    # Deck is now 5 slides: Cover, Composição, Brasil/Offshore, Org Patrimonial,
-    # Org Familiar.
-    sldIdLst = prs.slides._sldIdLst
-    ids = list(sldIdLst)
-    if len(ids) > 2:
-        sldIdLst.remove(ids[2])   # remove index 2 = slide 3
-
-    # Re-number TextBox 13 (slide number) on every remaining slide
-    for slide_num, sl in enumerate(prs.slides, start=1):
-        for sh in sl.shapes:
-            if sh.name == 'TextBox 13' and hasattr(sh, 'text_frame'):
-                for para in sh.text_frame.paragraphs:
-                    for run in para.runs:
-                        run.text = str(slide_num)
-                break
 
     prs.save(output_path)
 
