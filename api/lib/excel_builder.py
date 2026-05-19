@@ -18,6 +18,7 @@ STYLE SOURCE — we read its fonts/fills/number-formats, never its layout.
 import shutil
 from openpyxl import load_workbook, Workbook
 from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font
 from copy import copy
 
 # ── EMBEDDED TEMPLATE (base64 of gzipped xlsx) ────────────────────────────
@@ -1866,11 +1867,13 @@ def build_excel(data, output_path):
             tgt = off_items[_match(name, OFF_BLOCKS, 0)]
         for it in g.get('items', []):
             tgt.append({
-                'desc':     it.get('desc', ''),
-                'loc':      it.get('loc', '') or ('Brasil' if juris == 'Brasil' else 'Exterior'),
-                'dirpf':    it.get('dirpf'),
-                'dcbe':     it.get('dcbe'),
-                'comments': it.get('comments', ''),
+                'desc':           it.get('desc', ''),
+                'loc':            it.get('loc', '') or ('Brasil' if juris == 'Brasil' else 'Exterior'),
+                'subcategory':    it.get('subcategory', '') or '',
+                'subsubcategory': it.get('subsubcategory', '') or '',
+                'dirpf':          it.get('dirpf'),
+                'dcbe':           it.get('dcbe'),
+                'comments':       it.get('comments', ''),
             })
 
     # ── fresh workbook ──────────────────────────────────────────────────────
@@ -1912,28 +1915,105 @@ def build_excel(data, output_path):
         nonlocal r
         write_row(r, b=block_name, styles={k:'block' for k in 'BCDEFG'})
         r += 1
-        first_item = r
         wrote = 0
+        item_rows = []   # only actual item rows (excluding sub-headers and subtotals)
+
+        # Group items by (subcategory, subsubcategory) preserving original order.
+        # Structure: by_sub[sub_name] = {"items_no_subsub": [...], "by_subsub": {subsub_name: [items...]}}
+        by_sub = {}
+        sub_order = []
         for it in items:
-            item_counter[0] += 1
-            write_row(r,
-                      b=item_counter[0],
-                      c=it['desc'],
-                      d=it['loc'],
-                      e=it['dirpf'] if value_col == 'E' else None,
-                      f=it['dcbe'] if value_col == 'F' else None,
-                      g=it['comments'],
+            sub = it.get('subcategory') or '(sem subcategoria)'
+            subsub = it.get('subsubcategory') or ''
+            if sub not in by_sub:
+                by_sub[sub] = {'items_no_subsub': [], 'by_subsub': {}, 'subsub_order': []}
+                sub_order.append(sub)
+            if subsub:
+                if subsub not in by_sub[sub]['by_subsub']:
+                    by_sub[sub]['by_subsub'][subsub] = []
+                    by_sub[sub]['subsub_order'].append(subsub)
+                by_sub[sub]['by_subsub'][subsub].append(it)
+            else:
+                by_sub[sub]['items_no_subsub'].append(it)
+
+        for sub_name in sub_order:
+            entry = by_sub[sub_name]
+            # SUBCATEGORY header
+            write_row(r, c=f'  · {sub_name}',
                       styles={'B':'item_num','C':'item_desc','D':'item_pais',
                               'E':'item_dirpf','F':'item_dcbe','G':'item_coment'})
+            ws[f'C{r}'].font = Font(name='Gotham SSm', size=9, bold=True, italic=True, color='6B7280')
             r += 1
-            wrote += 1
+            sub_item_rows = []  # all item rows under this subcategory (including subsub)
+
+            # Items with no subsubcategory (direct children of subcategory)
+            for it in entry['items_no_subsub']:
+                item_counter[0] += 1
+                write_row(r,
+                          b=item_counter[0],
+                          c=it['desc'],
+                          d=it['loc'],
+                          e=it['dirpf'] if value_col == 'E' else None,
+                          f=it['dcbe'] if value_col == 'F' else None,
+                          g=it['comments'],
+                          styles={'B':'item_num','C':'item_desc','D':'item_pais',
+                                  'E':'item_dirpf','F':'item_dcbe','G':'item_coment'})
+                sub_item_rows.append(r); item_rows.append(r)
+                r += 1; wrote += 1
+
+            # Items grouped by subsubcategory
+            for subsub_name in entry['subsub_order']:
+                subsub_items = entry['by_subsub'][subsub_name]
+                # SUB-SUBCATEGORY header
+                write_row(r, c=f'      · {subsub_name}',
+                          styles={'B':'item_num','C':'item_desc','D':'item_pais',
+                                  'E':'item_dirpf','F':'item_dcbe','G':'item_coment'})
+                ws[f'C{r}'].font = Font(name='Gotham SSm', size=8, italic=True, color='9CA3AF')
+                r += 1
+                subsub_item_rows = []
+                for it in subsub_items:
+                    item_counter[0] += 1
+                    write_row(r,
+                              b=item_counter[0],
+                              c=it['desc'],
+                              d=it['loc'],
+                              e=it['dirpf'] if value_col == 'E' else None,
+                              f=it['dcbe'] if value_col == 'F' else None,
+                              g=it['comments'],
+                              styles={'B':'item_num','C':'item_desc','D':'item_pais',
+                                      'E':'item_dirpf','F':'item_dcbe','G':'item_coment'})
+                    subsub_item_rows.append(r); sub_item_rows.append(r); item_rows.append(r)
+                    r += 1; wrote += 1
+                # Subsub subtotal only when 2+ items
+                if len(subsub_item_rows) > 1:
+                    write_row(r, c=f'        Subtotal {subsub_name}',
+                              styles={'B':'item_num','C':'item_desc','D':'item_pais',
+                                      'E':'item_dirpf','F':'item_dcbe','G':'item_coment'})
+                    ws[f'C{r}'].font = Font(name='Gotham SSm', size=8, italic=True, color='9CA3AF')
+                    ws[f'{value_col}{r}'] = '=' + '+'.join(f'{value_col}{x}' for x in subsub_item_rows)
+                    v = ws[f'{value_col}{r}']
+                    v.font = Font(name='Gotham SSm', size=8, italic=True, color='6B7280')
+                    v.number_format = '#,##0.00'
+                    r += 1
+
+            # Subcategory subtotal — only when 2+ items total under this subcategory
+            if len(sub_item_rows) > 1:
+                write_row(r, c=f'    Subtotal {sub_name}',
+                          styles={'B':'item_num','C':'item_desc','D':'item_pais',
+                                  'E':'item_dirpf','F':'item_dcbe','G':'item_coment'})
+                ws[f'C{r}'].font = Font(name='Gotham SSm', size=9, italic=True, color='6B7280')
+                ws[f'{value_col}{r}'] = '=' + '+'.join(f'{value_col}{x}' for x in sub_item_rows)
+                v = ws[f'{value_col}{r}']
+                v.font = Font(name='Gotham SSm', size=9, bold=True, italic=True, color='1f2937')
+                v.number_format = '#,##0.00'
+                r += 1
+
         if wrote == 0:
             write_row(r, d=('Brasil' if value_col == 'E' else 'Exterior'),
                       styles={'B':'item_num','C':'item_desc','D':'item_pais',
                               'E':'item_dirpf','F':'item_dcbe','G':'item_coment'})
+            item_rows.append(r)
             r += 1
-            wrote = 1
-        first, last = first_item, r - 1
         tot_val_style = 'btot_dirpf' if value_col == 'E' else 'btot_dcbe'
         write_row(r,
                   b=f'Total {block_name}:',
@@ -1941,7 +2021,8 @@ def build_excel(data, output_path):
                           'E':(tot_val_style if value_col=='E' else 'btot_label'),
                           'F':(tot_val_style if value_col=='F' else 'btot_label'),
                           'G':'btot_label'})
-        ws[f'{value_col}{r}'] = f'=SUM({value_col}{first}:{value_col}{last})'
+        if item_rows:
+            ws[f'{value_col}{r}'] = '=' + '+'.join(f'{value_col}{x}' for x in item_rows)
         total_store.append(r)
         r += 1
 
