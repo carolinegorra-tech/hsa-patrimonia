@@ -397,6 +397,7 @@ function App(){
     });
   };
 
+  const totDIRPF=data?.groups?.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dirpf||0),0),0)||0;
   const totDCBE=data?.groups?.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dcbe||0),0),0)||0;
   const nItems=data?.groups?.reduce((a,g)=>a+g.items.length,0)||0;
   const brGrps=data?.groups?.filter(g=>g.jurisdiction==="Brasil")||[];
