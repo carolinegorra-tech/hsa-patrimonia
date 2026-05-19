@@ -61,18 +61,56 @@ def auth(x_hsa_password: str | None = Header(default=None)) -> None:
 
 
 EXTRACT_PROMPT = """Extraia todos os bens, direitos e informações familiares deste(s) documento(s) e retorne APENAS JSON válido (sem markdown, sem ```):
-{"client":"NOME COMPLETO","cpf":"000.000.000-00","year":2024,"spouse":{"name":"","cpf":"","marriage_regime":"","marriage_date":"","certificate_registry":""},"dependents":[{"name":"","cpf":"","birth_date":"","relationship":""}],"groups":[{"name":"categoria","jurisdiction":"Brasil ou Offshore","items":[{"id":1,"desc":"descrição do ativo","loc":"cidade/país","dirpf":valor_numerico_ou_null,"dcbe":valor_numerico_ou_null,"comments":""}]}],"debts":[{"id":1,"desc":"descrição da dívida","value":valor_numerico}]}
+{"client":"NOME COMPLETO","cpf":"000.000.000-00","year":2024,"spouse":{"name":"","cpf":"","marriage_regime":"","marriage_date":"","certificate_registry":""},"dependents":[{"name":"","cpf":"","birth_date":"","relationship":""}],"groups":[{"name":"categoria","jurisdiction":"Brasil ou Offshore","items":[{"id":1,"desc":"descrição do ativo","loc":"cidade/país","subcategory":"","subsubcategory":"","dirpf":valor_numerico_ou_null,"dcbe":valor_numerico_ou_null,"comments":""}]}],"debts":[{"id":1,"desc":"descrição da dívida","subcategory":"","subsubcategory":"","value":valor_numerico}]}
 
 REGRAS CRÍTICAS:
 1. DIRPF — use SEMPRE o valor do resumo por grupo (ex: "Total Grupo 01 Bens Imóveis = R$ 45.340.841,37"). NÃO some itens individuais — use o total oficial do grupo diretamente.
 2. Se um grupo tem itens individuais E um total, crie UM item por grupo usando o TOTAL OFICIAL.
-3. Grupos Brasil: Imóveis, Ações, Participações Societárias, Fundos de Investimento, Investimentos Renda Fixa, Obras de Arte, Veículos, Contas Bancárias, Créditos, Seguros, Títulos, Empréstimos
-4. jurisdiction = "Brasil" ou "Offshore"
-5. dirpf = valor em R$ da DIRPF, dcbe = valor em USD da DCBE
-6. Inclua dívidas da Ficha 8 no array "debts"
-7. Inclua cônjuge/companheiro(a) da Ficha 2 no campo "spouse" (deixe vazio "" se não houver)
-8. Inclua dependentes da Ficha 3 no array "dependents" (deixe [] se não houver)
-9. JSON 100% completo e fechado. Valores SEMPRE numéricos com centavos exatos."""
+3. jurisdiction = "Brasil" ou "Offshore"; dirpf = valor em R$ da DIRPF; dcbe = valor em USD da DCBE
+4. Inclua dívidas da Ficha 8 no array "debts"; cônjuge da Ficha 2 em "spouse"; dependentes da Ficha 3
+5. JSON 100% completo e fechado. Valores SEMPRE numéricos com centavos exatos.
+
+CLASSIFICAÇÃO EM 3 NÍVEIS — Para cada item, escolha o GRUPO (campo "name"), a SUBCATEGORIA (campo "subcategory") e quando aplicável o SUB-ITEM (campo "subsubcategory"). Se não conseguir identificar com certeza pela descrição, deixe "" (string vazia). NUNCA invente.
+
+GRUPOS válidos para "name":
+"Bens Imóveis" | "Bens Móveis" | "Participações Societárias" | "Aplicações e Investimentos" | "Previdência Privada" | "Créditos e Direitos" | "Contas Bancárias e Saldos" | "Criptoativos" | "Remuneração Variável em Equity"
+
+SUBCATEGORIAS e SUB-ITENS por grupo:
+
+• Bens Imóveis → subcategory ∈ {"Residenciais","Comerciais e Industriais","Rurais","Outros"}; subsubcategory = ""
+
+• Bens Móveis → subcategory ∈ {"Veículos","Aviação e Náutica","Arte, Joias e Coleções","Outros","NFT / Ativo Digital Não Fungível"}; subsubcategory = ""
+
+• Participações Societárias → subcategory ∈ {"Empresa operacional — sócio majoritário / controlador","Empresa operacional — sócio minoritário","Holding patrimonial pura","Holding mista (patrimonial + operacional)","Sociedade em Conta de Participação (SCP)","Participação em startup / empresa anjo","Mercado de Capitais","Participação em empresa no exterior (LLC, offshore, BVI, Cayman)","Trust no exterior (Lei 14.754/23)"}; subsubcategory = ""
+
+• Aplicações e Investimentos → subcategory ∈ {"Renda Fixa","Fundos","Renda Variável","Alta Liquidez"}; subsubcategory:
+  - Se "Renda Fixa": ∈ {"CDB / RDB","LCI / LCA (isentos de IR para PF)","LIG — Letra Imobiliária Garantida","LC — Letra de Câmbio","CRI / CRA (isentos de IR para PF)","Debêntures (quando ativo)","Debêntures incentivadas (infraestrutura — isentas de IR)","COE — Certificado de Operações Estruturadas","DPGE — Depósito a Prazo com Garantia Especial","Tesouro Selic / Prefixado / IPCA+"}
+  - Se "Fundos": ∈ {"Fundo DI / Renda Fixa","Fundo Multimercado (FIM)","Fundo de Ações (FIA)","Fundo Cambial","FIP — Fundo de Investimento em Participações","FIDC — Fundo de Direitos Creditórios","FII — Fundo de Investimento Imobiliário","ETF (renda fixa ou variável)","Fundo de Investimento Exclusivo (FIE)","Fundo no Exterior / Fundo Offshore"}
+  - Se "Renda Variável": ∈ {"Ações (B3 — custódia em corretora)","BDRs — Brazilian Depositary Receipts","ETF negociado em bolsa","Opções / derivativos","Contratos futuros (dólar, índice, commodities)"}
+  - Se "Alta Liquidez": ∈ {"Poupança","Conta remunerada / CDB liquidez diária","Fundo DI com resgate D+0"}
+
+• Previdência Privada → subcategory ∈ {"PGBL — deduz até 12% da renda bruta","VGBL — IR só sobre rendimentos","FAPI — Fundo de Aposentadoria Programada Individual","Previdência no exterior (401k, pension fund, plano estrangeiro)"}; subsubcategory = ""
+
+• Créditos e Direitos → subcategory ∈ {"Empréstimos Concedidos","Recebíveis e Direitos"}; subsubcategory:
+  - Se "Empréstimos Concedidos": ∈ {"Mútuo / empréstimo a sócio (AFAC ou contrato formal)","Mútuo / empréstimo a familiar","Mútuo / empréstimo a terceiros"}
+  - Se "Recebíveis e Direitos": ∈ {"Conta a receber (venda parcelada)","Direito sobre imóvel (promessa, opção de compra)","Precatório / crédito judicial","Herança a receber / inventário em curso","Indenização a receber (trabalhista, cível)","Depósito caução / garantia de aluguel","Saldo do FGTS (código 40)","Consórcio contemplado ou não (código 95)","Crédito tributário a recuperar","Ativos em inventário (espólio)"}
+
+• Contas Bancárias e Saldos → subcategory ∈ {"Conta corrente (banco nacional)","Conta poupança","Conta remunerada / CDB liquidez diária","Conta no exterior (saldo > US$ 1.000 em 31/12)","Conta em corretora no exterior (IB, Schwab...)","Conta em fintech / carteira digital"}; subsubcategory = ""
+
+• Criptoativos → subcategory ∈ {"Bitcoin (BTC)","Ethereum (ETH)","Stablecoins (USDT, USDC, BRZ)","Altcoins diversas","Tokens de utilidade / governança","NFTs"}; subsubcategory = ""
+
+• Remuneração Variável em Equity → subcategory ∈ {"Opções de Compra","Ações Restritas","Planos de Compra","Phantom / Sintéticos","Startups"}; subsubcategory:
+  - Se "Opções de Compra": ∈ {"Stock Options (não exercida)","Stock Options exercidas","Warrants"}
+  - Se "Ações Restritas": ∈ {"RSU — Restricted Stock Unit (em vesting)","RSU liquidada","RSA — Restricted Stock Award"}
+  - Se "Planos de Compra": ∈ {"ESPP — Employee Stock Purchase Plan","Matching de ações pelo empregador"}
+  - Se "Phantom / Sintéticos": ∈ {"Phantom Shares","SAR — Stock Appreciation Rights","Bônus atrelado a performance (cash-settled)"}
+  - Se "Startups": ∈ {"Opção de compra em startup","Vesting em empresa não listada","SAFE — Simple Agreement for Future Equity","Nota conversível"}
+
+DÍVIDAS (array "debts") — também classificadas:
+• Para CADA dívida, "subcategory" ∈ {"Financiamentos","Empréstimos","Outros Passivos"} e "subsubcategory":
+  - Se "Financiamentos": ∈ {"Financiamento imobiliário (SFH, SFI, alienação fiduciária)","Financiamento de veículo / bem móvel"}
+  - Se "Empréstimos": ∈ {"Empréstimo bancário (pessoal, consignado)","Empréstimo de pessoa física (sócio, familiar)","Empréstimo de pessoa jurídica (empresa do grupo)"}
+  - Se "Outros Passivos": ∈ {"Debêntures emitidas","Parcelamento fiscal (REFIS)","Garantia prestada (aval, fiança)","Dívida no exterior"}"""
 
 EXTRACT_SYSTEM = (
     "Especialista em declarações fiscais brasileiras. "
