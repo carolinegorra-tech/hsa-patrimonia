@@ -104,7 +104,7 @@ function EditCell({value, onChange}) {
   );
 }
 
-function GroupTable({group, onUpdate}){
+function GroupTable({group, onUpdate, onAddItem}){
   const [open,setOpen]=useState(true);
   const totD=group.items.reduce((a,i)=>a+(i.dirpf||0),0);
   const totC=group.items.reduce((a,i)=>a+(i.dcbe||0),0);
@@ -138,8 +138,19 @@ function GroupTable({group, onUpdate}){
               {group.items.map((item,idx)=>(
                 <tr key={item.id||idx} className="rh" style={{borderTop:`1px solid ${C.border}`}}>
                   <td style={{padding:"9px 12px",color:C.muted,textAlign:"center",fontSize:10}}>{item.id}</td>
-                  <td style={{padding:"9px 12px",color:C.text,maxWidth:340}}>{item.desc}</td>
-                  <td style={{padding:"9px 12px",color:C.muted,whiteSpace:"nowrap"}}>{item.loc}</td>
+                  <td style={{padding:"9px 12px",color:C.text,maxWidth:340}}>
+                    {/* desc is editable inline for manually-added items (empty desc) */}
+                    {item.desc===''
+                      ? <input defaultValue="" placeholder="Descrição do ativo" onBlur={e=>onUpdate(group.name,group.jurisdiction,idx,"desc",e.target.value)}
+                          style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,padding:"3px 7px",color:C.text,fontSize:11,fontFamily:"'Nunito Sans',sans-serif",width:"100%"}}/>
+                      : item.desc}
+                  </td>
+                  <td style={{padding:"9px 12px",color:C.muted,whiteSpace:"nowrap"}}>
+                    {item.desc===''
+                      ? <input defaultValue="" placeholder="País / Local" onBlur={e=>onUpdate(group.name,group.jurisdiction,idx,"loc",e.target.value)}
+                          style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,padding:"3px 7px",color:C.muted,fontSize:11,fontFamily:"'Nunito Sans',sans-serif",width:90}}/>
+                      : item.loc}
+                  </td>
                   <td style={{padding:"9px 12px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:C.text}}>
                     <EditCell value={item.dirpf} onChange={v=>onUpdate(group.name,group.jurisdiction,idx,"dirpf",v)}/>
                   </td>
@@ -157,6 +168,15 @@ function GroupTable({group, onUpdate}){
               </tr>
             </tfoot>
           </table>
+          {/* + Adicionar item row */}
+          {onAddItem && (
+            <div style={{padding:"8px 18px",borderTop:`1px dashed ${C.border}`}}>
+              <button onClick={()=>onAddItem(group.name,group.jurisdiction)}
+                style={{background:"transparent",color:C.muted,border:"none",cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",gap:5,padding:0}}>
+                <span style={{fontSize:15,lineHeight:1}}>+</span> Adicionar item
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -302,6 +322,38 @@ function App(){
       });
       return {...prev, groups};
     });
+  };
+
+  // Add a blank item to an existing group
+  const addItemToGroup = (grpName, juris) => {
+    setData(prev => {
+      const groups = prev.groups.map(g => {
+        if (g.name === grpName && g.jurisdiction === juris) {
+          const newId = (g.items.reduce((a,i)=>Math.max(a,i.id||0),0))+1;
+          return {...g, items:[...g.items, {id:newId, desc:"", loc:"", dirpf:null, dcbe:null, comments:""}]};
+        }
+        return g;
+      });
+      return {...prev, groups};
+    });
+  };
+
+  // Add a new "Outros" group to a jurisdiction (if it doesn't exist yet)
+  const addOutrosGroup = (juris) => {
+    const name = juris === "Brasil" ? "Outros Ativos" : "Outros Ativos no Exterior";
+    setData(prev => {
+      const exists = prev.groups.some(g => g.name === name && g.jurisdiction === juris);
+      if (exists) {
+        // Group already exists — just add a new blank item to it
+        addItemToGroup(name, juris);
+        setActiveCat(name);
+        return prev;
+      }
+      const newGrp = {name, jurisdiction: juris, items:[{id:1, desc:"", loc:"", dirpf:null, dcbe:null, comments:""}]};
+      return {...prev, groups:[...prev.groups, newGrp]};
+    });
+    setActiveJuris(juris);
+    setTimeout(()=>setActiveCat(juris==="Brasil"?"Outros Ativos":"Outros Ativos no Exterior"),50);
   };
 
   const totDIRPF=data?.groups?.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dirpf||0),0),0)||0;
@@ -568,9 +620,9 @@ function App(){
           })}
         </div>
 
-        {/* Category sub-tabs (filtered by active jurisdiction) */}
+        {/* Category sub-tabs + add Outros button */}
         {activeGrps.length > 0 && (
-          <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:14}}>
+          <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:14,alignItems:"center"}}>
             {["Todos", ...activeGrps.map(g=>g.name)].map(catName => {
               const isActive = activeCat === catName;
               const count = catName === "Todos"
@@ -594,6 +646,23 @@ function App(){
                 </button>
               );
             })}
+            {/* + Outros button */}
+            <button
+              onClick={()=>addOutrosGroup(activeJuris)}
+              style={{
+                background:"transparent",
+                color:C.muted,
+                border:`1px dashed ${C.border}`,
+                borderRadius:999,
+                padding:"7px 14px",
+                cursor:"pointer",
+                fontFamily:"'Nunito Sans',sans-serif",
+                fontSize:12,
+                fontWeight:500,
+                display:"flex",alignItems:"center",gap:5,
+              }}>
+              <span style={{fontSize:14,lineHeight:1}}>+</span> Outros
+            </button>
           </div>
         )}
 
@@ -604,7 +673,7 @@ function App(){
           </div>
         ) : (
           <div style={{marginBottom:20}}>
-            {visibleGrps.map(g=><GroupTable key={g.name+g.jurisdiction} group={g} onUpdate={updateItem}/>)}
+            {visibleGrps.map(g=><GroupTable key={g.name+g.jurisdiction} group={g} onUpdate={updateItem} onAddItem={addItemToGroup}/>)}
           </div>
         )}
 
