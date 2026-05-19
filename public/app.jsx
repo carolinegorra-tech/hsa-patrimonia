@@ -30,6 +30,53 @@ const brl = v => v != null && v !== "" ? new Intl.NumberFormat("pt-BR",{style:"c
 const usd = v => v > 0 ? "US$ "+new Intl.NumberFormat("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}).format(v) : "—";
 const n = v => v != null && v !== 0 ? new Intl.NumberFormat("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}).format(v) : "—";
 
+// ── Persistent review storage ────────────────────────────────────────────
+// Each client has a single JSON blob in localStorage with shape:
+//   { "normalized desc 1": {reviewed:true, comments:"..."}, ... }
+// Description is normalized (lowercase, no accents, no extra spaces) so small
+// variations in extraction phrasing still match the same record.
+const normalizeKey = (s) => (s||"")
+  .toString()
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g,"")  // strip accents
+  .replace(/[^\w\s]/g," ")          // punctuation → space
+  .replace(/\s+/g," ")              // collapse whitespace
+  .trim()
+  .toLowerCase()
+  .slice(0,120);                    // cap length
+
+const reviewStoreKey = (client) => `clientReview:${normalizeKey(client)}`;
+
+const loadReviewStore = (client) => {
+  try {
+    const raw = localStorage.getItem(reviewStoreKey(client));
+    return raw ? JSON.parse(raw) : {};
+  } catch(e) { return {}; }
+};
+
+const saveReviewStore = (client, store) => {
+  try { localStorage.setItem(reviewStoreKey(client), JSON.stringify(store)); }
+  catch(e) {}
+};
+
+const hydrateItemsFromStore = (groups, client) => {
+  const store = loadReviewStore(client);
+  return groups.map(g => ({
+    ...g,
+    items: g.items.map(item => {
+      const k = normalizeKey(item.desc);
+      const saved = store[k];
+      if (!saved) return item;
+      return {
+        ...item,
+        comments: item.comments || saved.comments || "",
+        reviewed: saved.reviewed || false,
+      };
+    }),
+  }));
+};
+
+
 const DEMO = {
   client:"JANE MARGARET DOE", year:2024,
   spouse:{name:"JOHN ROBERT DOE", marriage_regime:"Comunhão Parcial de Bens", marriage_date:"08/04/2003"},
@@ -113,33 +160,21 @@ function Toggle({on, onChange}){
   );
 }
 
-function GroupTable({group, onUpdate, onAddItem, clientKey}){
+function GroupTable({group, onUpdate, onAddItem}){
   const [open,setOpen]=useState(true);
   const [openComment,setOpenComment]=useState({});
 
-  // Review state — persisted in localStorage keyed by clientKey+desc so it
-  // survives across sessions and is pre-loaded next time same client is reviewed.
-  const lsKey = (item) => `review:${clientKey||"demo"}:${item.desc||item.id}`;
-  const initReviewed = () => {
-    const r={};
-    group.items.forEach((item,idx)=>{
-      try{ if(localStorage.getItem(lsKey(item))==="1") r[idx]=true; }catch(e){}
-    });
-    return r;
-  };
-  const [reviewed, setReviewed] = useState(initReviewed);
-
-  const toggleReview = (idx, item, e) => {
-    e.stopPropagation();
-    const next = !reviewed[idx];
-    setReviewed(p=>({...p,[idx]:next}));
-    try{ next ? localStorage.setItem(lsKey(item),"1") : localStorage.removeItem(lsKey(item)); }catch(e){}
-  };
-
   const totD=group.items.reduce((a,i)=>a+(i.dirpf||0),0);
   const totC=group.items.reduce((a,i)=>a+(i.dcbe||0),0);
-  const nReviewed = Object.values(reviewed).filter(Boolean).length;
+  const nReviewed = group.items.filter(i => i.reviewed).length;
   const toggleComment = (idx,e) => { e.stopPropagation(); setOpenComment(p=>({...p,[idx]:!p[idx]})); };
+  // Pre-open the comment row if the item already has a saved comment
+  useEffect(()=>{
+    const init = {};
+    group.items.forEach((item, idx) => { if (item.comments) init[idx] = true; });
+    setOpenComment(prev => ({...init, ...prev}));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [group.name]);
   return(
     <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,marginBottom:10,overflow:"hidden"}}>
       <div onClick={()=>setOpen(!open)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 18px",cursor:"pointer",userSelect:"none"}}>
@@ -203,7 +238,7 @@ function GroupTable({group, onUpdate, onAddItem, clientKey}){
                     </button>
                   </td>
                   <td style={{padding:"9px 12px",textAlign:"right"}}>
-                    <Toggle on={!!reviewed[idx]} onChange={v=>toggleReview(idx,item,{stopPropagation:()=>{}})}/>
+                    <Toggle on={!!item.reviewed} onChange={v=>onUpdate(group.name,group.jurisdiction,idx,"reviewed",v)}/>
                   </td>
                 </tr>,
                 openComment[idx] ? (
@@ -317,6 +352,10 @@ function App(){
       let parsed;
       try{ parsed = JSON.parse(body); }
       catch(e){ throw new Error("JSON inválido do backend: "+body.slice(0,150)); }
+      // Hydrate items with previously-saved review state and comments
+      if (parsed?.groups && parsed?.client) {
+        parsed.groups = hydrateItemsFromStore(parsed.groups, parsed.client);
+      }
       setData(parsed);setStep("verify");
     }catch(e){setError(e.message);}
     finally{setLoading(false);setLoadMsg("");}
@@ -381,6 +420,23 @@ function App(){
       const groups = prev.groups.map(g => {
         if (g.name === grpName && g.jurisdiction === juris) {
           const items = g.items.map((it, i) => i === idx ? {...it, [field]: value} : it);
+          // Persist comments/reviewed to localStorage so they survive next upload
+          if (field === "comments" || field === "reviewed") {
+            const item = items[idx];
+            const k = normalizeKey(item.desc);
+            if (k && prev.client) {
+              const store = loadReviewStore(prev.client);
+              const cur = store[k] || {};
+              store[k] = {
+                ...cur,
+                ...(field === "comments" ? {comments: value} : {}),
+                ...(field === "reviewed" ? {reviewed: value} : {}),
+              };
+              // Clean up if both are empty/false
+              if (!store[k].comments && !store[k].reviewed) delete store[k];
+              saveReviewStore(prev.client, store);
+            }
+          }
           return {...g, items};
         }
         return g;
@@ -530,7 +586,7 @@ function App(){
           <button className="bg" style={{background:C.gold,color:"#080C14",padding:"13px 30px",borderRadius:8,border:"none",cursor:(files.dirpf||files.dcbe)&&!loading?"pointer":"not-allowed",fontFamily:"'Nunito Sans',sans-serif",fontWeight:700,fontSize:14,letterSpacing:"0.05em",opacity:(files.dirpf||files.dcbe)&&!loading?1:0.4}} onClick={processFiles}>
             {loading?<span style={{display:"flex",alignItems:"center",gap:8}}><span style={{width:13,height:13,border:"2px solid rgba(0,0,0,.3)",borderTopColor:"#000",borderRadius:"50%",animation:"spin .8s linear infinite",display:"inline-block"}}/>{loadMsg||"Processando..."}</span>:"→ Processar Arquivos PDF"}
           </button>
-          <button className="gh" style={{background:"transparent",color:C.muted,padding:"13px 22px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>{setData(DEMO);setStep("verify");}}>Usar Dados Demo</button>
+          <button className="gh" style={{background:"transparent",color:C.muted,padding:"13px 22px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>{setData({...DEMO, groups: hydrateItemsFromStore(DEMO.groups, DEMO.client)});setStep("verify");}}>Usar Dados Demo</button>
         </div>
         <p style={{textAlign:"center",color:C.dim,fontSize:11,lineHeight:1.6}}>Os documentos são processados via API e não são armazenados.<br/>Também é possível carregar apenas um dos dois arquivos.</p>
       </div>
@@ -752,7 +808,7 @@ function App(){
           </div>
         ) : (
           <div style={{marginBottom:20}}>
-            {visibleGrps.map(g=><GroupTable key={g.name+g.jurisdiction} group={g} onUpdate={updateItem} onAddItem={addItemToGroup} clientKey={data?.client||""}/>)}
+            {visibleGrps.map(g=><GroupTable key={g.name+g.jurisdiction} group={g} onUpdate={updateItem} onAddItem={addItemToGroup}/>)}
           </div>
         )}
 
