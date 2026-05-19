@@ -159,9 +159,17 @@ function Toggle({on, onChange}){
   );
 }
 
-function GroupTable({group, onUpdate, onAddItem}){
+function GroupTable({group, onUpdate, onAddItem, dragSource, setDragSource, onMoveItem}){
   const [open,setOpen]=useState(true);
   const [openComment,setOpenComment]=useState({});
+  const [isDragOver, setIsDragOver] = useState(false);
+
+  // This group is a valid drop target when:
+  // - something is being dragged
+  // - from a DIFFERENT group, same jurisdiction
+  const isValidDropTarget = dragSource
+    && dragSource.juris === group.jurisdiction
+    && dragSource.grpName !== group.name;
 
   const totD=group.items.reduce((a,i)=>a+(i.dirpf||0),0);
   const totC=group.items.reduce((a,i)=>a+(i.dcbe||0),0);
@@ -175,7 +183,28 @@ function GroupTable({group, onUpdate, onAddItem}){
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [group.name]);
   return(
-    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,marginBottom:10,overflow:"hidden"}}>
+    <div
+      onDragOver={e => {
+        if (isValidDropTarget) { e.preventDefault(); setIsDragOver(true); }
+      }}
+      onDragLeave={() => setIsDragOver(false)}
+      onDrop={e => {
+        if (isValidDropTarget) {
+          e.preventDefault();
+          onMoveItem(dragSource, group.name, group.jurisdiction);
+          setIsDragOver(false);
+        }
+      }}
+      style={{
+        background: isDragOver && isValidDropTarget ? "rgba(76,175,80,.08)" : C.card,
+        border: isValidDropTarget
+          ? `2px dashed ${isDragOver ? "#4CAF50" : "#B8D8C2"}`
+          : `1px solid ${C.border}`,
+        borderRadius:10,
+        marginBottom:10,
+        overflow:"hidden",
+        transition:"background .15s, border-color .15s",
+      }}>
       <div onClick={()=>setOpen(!open)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 18px",cursor:"pointer",userSelect:"none"}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <span style={{fontWeight:700,fontSize:13,color:C.text}}>{group.name}</span>
@@ -195,7 +224,7 @@ function GroupTable({group, onUpdate, onAddItem}){
       {open&&(
         <div style={{overflowX:"auto"}}>
           <div style={{padding:"4px 18px 6px",background:C.surface,borderTop:`1px solid ${C.border}`}}>
-            <span style={{fontSize:10,color:C.dim}}>✏️ Clique em qualquer valor para editar</span>
+            <span style={{fontSize:10,color:C.dim}}>✏️ Clique em qualquer valor para editar · ⋮⋮ Arraste para mover entre categorias</span>
           </div>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,tableLayout:"auto"}}>
             <thead>
@@ -215,8 +244,22 @@ function GroupTable({group, onUpdate, onAddItem}){
             </thead>
             <tbody>
               {group.items.map((item,idx)=>[
-                <tr key={(item.id||idx)+"r"} className="rh" style={{borderTop:`1px solid ${C.border}`}}>
-                  <td style={{padding:"9px 12px",color:C.muted,textAlign:"center",fontSize:10}}>{item.id}</td>
+                <tr key={(item.id||idx)+"r"} className="rh"
+                  draggable
+                  onDragStart={e => {
+                    e.dataTransfer.effectAllowed = "move";
+                    setDragSource({grpName: group.name, juris: group.jurisdiction, idx});
+                  }}
+                  onDragEnd={() => setDragSource(null)}
+                  style={{
+                    borderTop:`1px solid ${C.border}`,
+                    cursor: "grab",
+                    opacity: dragSource?.grpName===group.name && dragSource?.idx===idx ? 0.35 : 1,
+                  }}>
+                  <td style={{padding:"9px 4px 9px 12px",color:C.muted,textAlign:"center",fontSize:10,whiteSpace:"nowrap"}}>
+                    <span style={{color:C.dim,marginRight:4,letterSpacing:"-2px",fontSize:11,userSelect:"none"}} title="Arraste para mover de categoria">⋮⋮</span>
+                    {item.id}
+                  </td>
                   <td style={{padding:"9px 12px",color:C.text,maxWidth:340}}>
                     {item.desc===''
                       ? <input defaultValue="" placeholder="Descrição do ativo" onBlur={e=>onUpdate(group.name,group.jurisdiction,idx,"desc",e.target.value)}
@@ -465,7 +508,6 @@ function App(){
     });
   };
 
-  // Add a blank item to an existing group
   const addItemToGroup = (grpName, juris) => {
     setData(prev => {
       const groups = prev.groups.map(g => {
@@ -479,7 +521,32 @@ function App(){
     });
   };
 
-  // Add a new "Outros" group to a jurisdiction (if it doesn't exist yet)
+  // ── Drag & drop: move items between groups within the same jurisdiction ──
+  const [dragSource, setDragSource] = useState(null);  // {grpName, juris, idx}
+  const moveItem = (src, destGrpName, destJuris) => {
+    if (src.grpName === destGrpName && src.juris === destJuris) return;
+    if (src.juris !== destJuris) return;  // same currency/jurisdiction only
+    setData(prev => {
+      let moved = null;
+      const cleaned = prev.groups.map(g => {
+        if (g.name === src.grpName && g.jurisdiction === src.juris) {
+          moved = g.items[src.idx];
+          return {...g, items: g.items.filter((_, i) => i !== src.idx)};
+        }
+        return g;
+      });
+      if (!moved) return prev;
+      const withAdded = cleaned.map(g => {
+        if (g.name === destGrpName && g.jurisdiction === destJuris) {
+          return {...g, items: [...g.items, moved]};
+        }
+        return g;
+      });
+      return {...prev, groups: withAdded};
+    });
+    setDragSource(null);
+  };
+
   const addOutrosGroup = (juris) => {
     const name = juris === "Brasil" ? "Outros Ativos" : "Outros Ativos no Exterior";
     setData(prev => {
@@ -574,9 +641,12 @@ function App(){
   }, [data]);
 
   const activeGrps = activeJuris === "Brasil" ? brGrps : offGrps;
-  const visibleGrps = activeCat === "Todos"
+  // While dragging, show ALL groups so the user can drop on any target
+  const visibleGrps = dragSource
     ? activeGrps
-    : activeGrps.filter(g => g.name === activeCat);
+    : (activeCat === "Todos"
+        ? activeGrps
+        : activeGrps.filter(g => g.name === activeCat));
 
   if(step==="upload")return(
     <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Nunito Sans',sans-serif",color:C.text,display:"flex",alignItems:"center",justifyContent:"center",padding:"32px 20px"}}>
@@ -856,7 +926,7 @@ function App(){
           </div>
         ) : (
           <div style={{marginBottom:20}}>
-            {visibleGrps.map(g=><GroupTable key={g.name+g.jurisdiction} group={g} onUpdate={updateItem} onAddItem={addItemToGroup}/>)}
+            {visibleGrps.map(g=><GroupTable key={g.name+g.jurisdiction} group={g} onUpdate={updateItem} onAddItem={addItemToGroup} dragSource={dragSource} setDragSource={setDragSource} onMoveItem={moveItem}/>)}
           </div>
         )}
 
