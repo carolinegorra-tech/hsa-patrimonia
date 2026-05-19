@@ -33,17 +33,15 @@ const n = v => v != null && v !== 0 ? new Intl.NumberFormat("pt-BR",{minimumFrac
 // ── Persistent review storage ────────────────────────────────────────────
 // Each client has a single JSON blob in localStorage with shape:
 //   { "normalized desc 1": {reviewed:true, comments:"..."}, ... }
-// Description is normalized (lowercase, no accents, no extra spaces) so small
-// variations in extraction phrasing still match the same record.
+// Normalization is aggressive (alphanumeric only) so small variations in the
+// AI's extracted text (spacing, punctuation, accents) still match the same key.
 const normalizeKey = (s) => (s||"")
   .toString()
   .normalize("NFD")
   .replace(/[\u0300-\u036f]/g,"")  // strip accents
-  .replace(/[^\w\s]/g," ")          // punctuation → space
-  .replace(/\s+/g," ")              // collapse whitespace
-  .trim()
   .toLowerCase()
-  .slice(0,120);                    // cap length
+  .replace(/[^a-z0-9]/g,"")        // alphanumeric only — max stability
+  .slice(0,100);
 
 const reviewStoreKey = (client) => `clientReview:${normalizeKey(client)}`;
 
@@ -424,28 +422,41 @@ function App(){
     setStep("done");
   };
 
+  // Lightweight toast for "saved" feedback
+  const [savedToast, setSavedToast] = useState(false);
+  const showSavedToast = () => {
+    setSavedToast(true);
+    setTimeout(()=>setSavedToast(false), 1400);
+  };
+
   const updateItem = (grpName, juris, idx, field, value) => {
+    // Persist to localStorage FIRST (synchronous side effect, outside reducer)
+    if ((field === "comments" || field === "reviewed") && data?.client) {
+      try {
+        const grp = data.groups.find(g => g.name === grpName && g.jurisdiction === juris);
+        const item = grp?.items?.[idx];
+        if (item?.desc) {
+          const k = normalizeKey(item.desc);
+          if (k) {
+            const store = loadReviewStore(data.client);
+            const cur = store[k] || {};
+            store[k] = {
+              ...cur,
+              ...(field === "comments" ? {comments: value} : {}),
+              ...(field === "reviewed" ? {reviewed: value} : {}),
+            };
+            if (!store[k].comments && !store[k].reviewed) delete store[k];
+            saveReviewStore(data.client, store);
+            showSavedToast();
+          }
+        }
+      } catch(e) { console.error("Save error:", e); }
+    }
+    // Then update React state
     setData(prev => {
       const groups = prev.groups.map(g => {
         if (g.name === grpName && g.jurisdiction === juris) {
           const items = g.items.map((it, i) => i === idx ? {...it, [field]: value} : it);
-          // Persist comments/reviewed to localStorage so they survive next upload
-          if (field === "comments" || field === "reviewed") {
-            const item = items[idx];
-            const k = normalizeKey(item.desc);
-            if (k && prev.client) {
-              const store = loadReviewStore(prev.client);
-              const cur = store[k] || {};
-              store[k] = {
-                ...cur,
-                ...(field === "comments" ? {comments: value} : {}),
-                ...(field === "reviewed" ? {reviewed: value} : {}),
-              };
-              // Clean up if both are empty/false
-              if (!store[k].comments && !store[k].reviewed) delete store[k];
-              saveReviewStore(prev.client, store);
-            }
-          }
           return {...g, items};
         }
         return g;
@@ -605,6 +616,16 @@ function App(){
   if(step==="verify")return(
     <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Nunito Sans',sans-serif",color:C.text,padding:"24px 20px"}} className="fi">
       <style>{style}</style>
+      {/* Saved toast */}
+      {savedToast && (
+        <div style={{
+          position:"fixed", bottom:24, right:24, zIndex:9999,
+          background:"#4CAF50", color:"#fff",
+          padding:"10px 18px", borderRadius:8,
+          fontFamily:"'Nunito Sans',sans-serif", fontSize:12, fontWeight:700,
+          letterSpacing:"0.05em", boxShadow:"0 6px 24px rgba(76,175,80,.4)",
+        }}>✓ Salvo</div>
+      )}
       <div style={{maxWidth:980,margin:"0 auto"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24,flexWrap:"wrap",gap:12}}>
           <div>
