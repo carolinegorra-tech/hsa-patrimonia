@@ -21205,6 +21205,23 @@ def build_deck(data, output_path):
         T(s6,"SEM DEPENDENTES",DX+70_000,DY+400_000,DW-140_000,fh(9),
           pt=9,bold=True,col=GRAY_MED,align='center',font='Gotham SSm Bold')
 
+    # ── Remove slide 3 (DETALHAMENTO DOS ATIVOS — bar chart) ─────────────────
+    # Deck is now 5 slides: Cover, Composição, Brasil/Offshore, Org Patrimonial,
+    # Org Familiar.
+    sldIdLst = prs.slides._sldIdLst
+    ids = list(sldIdLst)
+    if len(ids) > 2:
+        sldIdLst.remove(ids[2])   # remove index 2 = slide 3
+
+    # Re-number TextBox 13 (slide number) on every remaining slide
+    for slide_num, sl in enumerate(prs.slides, start=1):
+        for sh in sl.shapes:
+            if sh.name == 'TextBox 13' and hasattr(sh, 'text_frame'):
+                for para in sh.text_frame.paragraphs:
+                    for run in para.runs:
+                        run.text = str(slide_num)
+                break
+
     prs.save(output_path)
 
     # ── Stage 4: XML post-process (chart fonts + pie color) ──────────────────
