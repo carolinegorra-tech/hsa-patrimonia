@@ -198,11 +198,19 @@ function GroupTable({group, onUpdate, onAddItem}){
           <div style={{padding:"4px 18px 6px",background:C.surface,borderTop:`1px solid ${C.border}`}}>
             <span style={{fontSize:10,color:C.dim}}>✏️ Clique em qualquer valor para editar</span>
           </div>
-          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,tableLayout:"auto"}}>
             <thead>
               <tr style={{background:C.surface}}>
-                {["#","Descrição","País / Local","DIRPF (R$)","DCBE (US$)","",""].map((h,i)=>(
-                  <th key={i} style={{padding:"7px 12px",color:C.muted,fontWeight:600,fontSize:10,letterSpacing:"0.08em",textTransform:"uppercase",textAlign:i>=3?"right":i===0?"center":"left",whiteSpace:"nowrap"}}>{h}</th>
+                {[
+                  {h:"#", w:36, align:"center"},
+                  {h:"Descrição", w:"auto", align:"left"},
+                  {h:"País / Local", w:160, align:"left"},
+                  {h:"DIRPF (R$)", w:140, align:"right"},
+                  {h:"DCBE (US$)", w:130, align:"right"},
+                  {h:"", w:42, align:"right"},     // comment col — fixed
+                  {h:"", w:56, align:"right"},     // toggle col — fixed
+                ].map(({h,w,align},i)=>(
+                  <th key={i} style={{padding:"7px 12px",color:C.muted,fontWeight:600,fontSize:10,letterSpacing:"0.08em",textTransform:"uppercase",textAlign:align,whiteSpace:"nowrap",width:typeof w==="number"?w+"px":w}}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -228,7 +236,7 @@ function GroupTable({group, onUpdate, onAddItem}){
                   <td style={{padding:"9px 12px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:item.dcbe>0?C.goldBright:C.dim}}>
                     <EditCell value={item.dcbe>0?item.dcbe:null} onChange={v=>onUpdate(group.name,group.jurisdiction,idx,"dcbe",v)}/>
                   </td>
-                  <td style={{padding:"9px 10px",textAlign:"right",whiteSpace:"nowrap"}}>
+                  <td style={{padding:"9px 6px 9px 8px",textAlign:"center",width:42}}>
                     <button onClick={e=>toggleComment(idx,e)} title={item.comments?"Ver comentário":"Adicionar comentário"}
                       style={{background:"transparent",border:"none",cursor:"pointer",fontSize:13,padding:"2px 4px",
                         color: item.comments ? C.gold : C.muted,
@@ -237,7 +245,7 @@ function GroupTable({group, onUpdate, onAddItem}){
                       {item.comments ? "💬" : "🗒️"}
                     </button>
                   </td>
-                  <td style={{padding:"9px 12px",textAlign:"right"}}>
+                  <td style={{padding:"9px 14px 9px 6px",textAlign:"right",width:56}}>
                     <Toggle on={!!item.reviewed} onChange={v=>onUpdate(group.name,group.jurisdiction,idx,"reviewed",v)}/>
                   </td>
                 </tr>,
@@ -248,7 +256,7 @@ function GroupTable({group, onUpdate, onAddItem}){
                         <span style={{fontSize:10,color:C.muted,paddingTop:6,whiteSpace:"nowrap"}}>Comentário</span>
                         <textarea
                           defaultValue={item.comments||""}
-                          placeholder="Anotações internas sobre este ativo..."
+                          placeholder="Add Comments"
                           rows={2}
                           onBlur={e=>onUpdate(group.name,group.jurisdiction,idx,"comments",e.target.value)}
                           style={{flex:1,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:"7px 10px",color:C.text,fontSize:11,fontFamily:"'Nunito Sans',sans-serif",resize:"vertical",lineHeight:1.5}}
@@ -604,6 +612,24 @@ function App(){
             <p style={{color:C.muted,fontSize:12,marginTop:2}}>Ano-calendário {data?.year} · {data?.groups?.length} categorias · {nItems} itens · <span style={{color:C.dim,fontSize:11}}>⚿ dados anonimizados</span></p>
           </div>
           <div style={{display:"flex",gap:10,alignItems:"center"}}>
+            <button className="gh"
+              title="Apaga revisões e comentários salvos deste cliente neste navegador"
+              style={{background:"transparent",color:C.muted,padding:"10px 14px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:11}}
+              onClick={()=>{
+                if (!data?.client) return;
+                if (confirm(`Apagar todas as revisões e comentários salvos de ${data.client}?\n\nIsto remove os dados deste navegador (não afeta outros usuários).`)) {
+                  try { localStorage.removeItem(reviewStoreKey(data.client)); } catch(e) {}
+                  setData(prev => ({
+                    ...prev,
+                    groups: prev.groups.map(g => ({
+                      ...g,
+                      items: g.items.map(it => ({...it, reviewed: false, comments: ""})),
+                    })),
+                  }));
+                }
+              }}>
+              🧹 Limpar revisão
+            </button>
             <button className="gh" style={{background:"transparent",color:C.muted,padding:"10px 18px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:12}} onClick={()=>setStep("upload")}>← Voltar</button>
             <button className="bg" style={{background:C.gold,color:"#080C14",padding:"10px 22px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontWeight:700,fontSize:13,letterSpacing:"0.04em"}} onClick={confirm}>✓ Confirmar e Gerar Excel + PPT</button>
           </div>
