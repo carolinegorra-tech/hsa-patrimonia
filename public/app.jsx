@@ -106,8 +106,10 @@ function EditCell({value, onChange}) {
 
 function GroupTable({group, onUpdate, onAddItem}){
   const [open,setOpen]=useState(true);
+  const [openComment,setOpenComment]=useState({});  // {idx: true/false}
   const totD=group.items.reduce((a,i)=>a+(i.dirpf||0),0);
   const totC=group.items.reduce((a,i)=>a+(i.dcbe||0),0);
+  const toggleComment = (idx,e) => { e.stopPropagation(); setOpenComment(p=>({...p,[idx]:!p[idx]})); };
   return(
     <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,marginBottom:10,overflow:"hidden"}}>
       <div onClick={()=>setOpen(!open)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 18px",cursor:"pointer",userSelect:"none"}}>
@@ -129,35 +131,68 @@ function GroupTable({group, onUpdate, onAddItem}){
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
             <thead>
               <tr style={{background:C.surface}}>
-                {["#","Descrição","País / Local","DIRPF (R$)","DCBE (US$)"].map((h,i)=>(
-                  <th key={h} style={{padding:"7px 12px",color:C.muted,fontWeight:600,fontSize:10,letterSpacing:"0.08em",textTransform:"uppercase",textAlign:i>=3?"right":i===0?"center":"left",whiteSpace:"nowrap"}}>{h}</th>
+                {["#","Descrição","País / Local","DIRPF (R$)","DCBE (US$)",""].map((h,i)=>(
+                  <th key={i} style={{padding:"7px 12px",color:C.muted,fontWeight:600,fontSize:10,letterSpacing:"0.08em",textTransform:"uppercase",textAlign:i>=3?"right":i===0?"center":"left",whiteSpace:"nowrap"}}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {group.items.map((item,idx)=>(
-                <tr key={item.id||idx} className="rh" style={{borderTop:`1px solid ${C.border}`}}>
-                  <td style={{padding:"9px 12px",color:C.muted,textAlign:"center",fontSize:10}}>{item.id}</td>
-                  <td style={{padding:"9px 12px",color:C.text,maxWidth:340}}>
-                    {/* desc is editable inline for manually-added items (empty desc) */}
-                    {item.desc===''
-                      ? <input defaultValue="" placeholder="Descrição do ativo" onBlur={e=>onUpdate(group.name,group.jurisdiction,idx,"desc",e.target.value)}
-                          style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,padding:"3px 7px",color:C.text,fontSize:11,fontFamily:"'Nunito Sans',sans-serif",width:"100%"}}/>
-                      : item.desc}
-                  </td>
-                  <td style={{padding:"9px 12px",color:C.muted,whiteSpace:"nowrap"}}>
-                    {item.desc===''
-                      ? <input defaultValue="" placeholder="País / Local" onBlur={e=>onUpdate(group.name,group.jurisdiction,idx,"loc",e.target.value)}
-                          style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,padding:"3px 7px",color:C.muted,fontSize:11,fontFamily:"'Nunito Sans',sans-serif",width:90}}/>
-                      : item.loc}
-                  </td>
-                  <td style={{padding:"9px 12px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:C.text}}>
-                    <EditCell value={item.dirpf} onChange={v=>onUpdate(group.name,group.jurisdiction,idx,"dirpf",v)}/>
-                  </td>
-                  <td style={{padding:"9px 12px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:item.dcbe>0?C.goldBright:C.dim}}>
-                    <EditCell value={item.dcbe>0?item.dcbe:null} onChange={v=>onUpdate(group.name,group.jurisdiction,idx,"dcbe",v)}/>
-                  </td>
-                </tr>
+                <React.Fragment key={item.id||idx}>
+                  <tr className="rh" style={{borderTop:`1px solid ${C.border}`}}>
+                    <td style={{padding:"9px 12px",color:C.muted,textAlign:"center",fontSize:10}}>{item.id}</td>
+                    <td style={{padding:"9px 12px",color:C.text,maxWidth:340}}>
+                      {item.desc===''
+                        ? <input defaultValue="" placeholder="Descrição do ativo" onBlur={e=>onUpdate(group.name,group.jurisdiction,idx,"desc",e.target.value)}
+                            style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,padding:"3px 7px",color:C.text,fontSize:11,fontFamily:"'Nunito Sans',sans-serif",width:"100%"}}/>
+                        : item.desc}
+                    </td>
+                    <td style={{padding:"9px 12px",color:C.muted,whiteSpace:"nowrap"}}>
+                      {item.desc===''
+                        ? <input defaultValue="" placeholder="País / Local" onBlur={e=>onUpdate(group.name,group.jurisdiction,idx,"loc",e.target.value)}
+                            style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,padding:"3px 7px",color:C.muted,fontSize:11,fontFamily:"'Nunito Sans',sans-serif",width:90}}/>
+                        : item.loc}
+                    </td>
+                    <td style={{padding:"9px 12px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:C.text}}>
+                      <EditCell value={item.dirpf} onChange={v=>onUpdate(group.name,group.jurisdiction,idx,"dirpf",v)}/>
+                    </td>
+                    <td style={{padding:"9px 12px",textAlign:"right",fontFamily:"monospace",fontSize:11,color:item.dcbe>0?C.goldBright:C.dim}}>
+                      <EditCell value={item.dcbe>0?item.dcbe:null} onChange={v=>onUpdate(group.name,group.jurisdiction,idx,"dcbe",v)}/>
+                    </td>
+                    {/* Comment toggle button */}
+                    <td style={{padding:"9px 10px",textAlign:"right",whiteSpace:"nowrap"}}>
+                      <button onClick={e=>toggleComment(idx,e)} title={item.comments?"Ver comentário":"Adicionar comentário"}
+                        style={{background:"transparent",border:"none",cursor:"pointer",fontSize:13,padding:"2px 4px",
+                          color: item.comments ? C.gold : C.muted,
+                          opacity: openComment[idx] ? 1 : 0.6,
+                        }}>
+                        {item.comments ? "💬" : "🗒️"}
+                      </button>
+                    </td>
+                  </tr>
+                  {/* Inline comment row */}
+                  {openComment[idx] && (
+                    <tr style={{background:C.surface}}>
+                      <td colSpan={6} style={{padding:"8px 18px 10px"}}>
+                        <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
+                          <span style={{fontSize:10,color:C.muted,paddingTop:6,whiteSpace:"nowrap"}}>Comentário</span>
+                          <textarea
+                            defaultValue={item.comments||""}
+                            placeholder="Anotações internas sobre este ativo..."
+                            rows={2}
+                            onBlur={e=>onUpdate(group.name,group.jurisdiction,idx,"comments",e.target.value)}
+                            style={{
+                              flex:1,background:C.card,border:`1px solid ${C.border}`,
+                              borderRadius:6,padding:"7px 10px",color:C.text,
+                              fontSize:11,fontFamily:"'Nunito Sans',sans-serif",
+                              resize:"vertical",lineHeight:1.5,
+                            }}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
             <tfoot>
@@ -165,6 +200,7 @@ function GroupTable({group, onUpdate, onAddItem}){
                 <td colSpan={3} style={{padding:"9px 12px",color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.1em"}}>SUBTOTAL</td>
                 <td style={{padding:"9px 12px",color:C.goldBright,textAlign:"right",fontFamily:"monospace",fontWeight:700,fontSize:12}}>{n(totD)}</td>
                 <td style={{padding:"9px 12px",color:C.goldBright,textAlign:"right",fontFamily:"monospace",fontWeight:700,fontSize:11}}>{totC>0?n(totC):"—"}</td>
+                <td/>
               </tr>
             </tfoot>
           </table>
