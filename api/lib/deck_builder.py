@@ -19878,20 +19878,35 @@ def aggregate(data):
     """Returns dict with everything the deck needs."""
     groups = data.get('groups', [])
 
-    # Brasil: sum dirpf per group-name
+    # For the PPT, we collapse Previdência + Cripto + Equity into a single
+    # "Outros (Previdência, Cripto, Equity)" bucket so we don't blow past the
+    # 6-slot grid. These show up separately in the Excel and verify screen.
+    OUTROS_GROUPS = {
+        'Previdência Privada',
+        'Criptoativos',
+        'Remuneração Variável em Equity',
+    }
+    OUTROS_LABEL = 'Outros (Previdência, Cripto, Equity)'
+
+    def _bucket_name(name):
+        return OUTROS_LABEL if name in OUTROS_GROUPS else name
+
+    # Brasil: sum dirpf per group-name (after bucketing)
     br_agg = {}
     for g in groups:
         if g.get('jurisdiction') == 'Brasil':
             tot = sum((it.get('dirpf') or 0) for it in g['items'])
-            br_agg[g['name']] = br_agg.get(g['name'], 0) + tot
+            key = _bucket_name(g['name'])
+            br_agg[key] = br_agg.get(key, 0) + tot
     br_sorted = sorted(br_agg.items(), key=lambda kv: -kv[1])
 
-    # Offshore: sum dcbe per group-name
+    # Offshore: sum dcbe per group-name (after bucketing)
     off_agg = {}
     for g in groups:
         if g.get('jurisdiction') == 'Offshore':
             tot = sum((it.get('dcbe') or 0) for it in g['items'])
-            off_agg[g['name']] = off_agg.get(g['name'], 0) + tot
+            key = _bucket_name(g['name'])
+            off_agg[key] = off_agg.get(key, 0) + tot
     off_sorted = sorted(off_agg.items(), key=lambda kv: -kv[1])
 
     total_br  = sum(v for _, v in br_sorted)
