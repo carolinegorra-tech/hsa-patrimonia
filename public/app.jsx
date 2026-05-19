@@ -31,30 +31,40 @@ const usd = v => v > 0 ? "US$ "+new Intl.NumberFormat("pt-BR",{minimumFractionDi
 const n = v => v != null && v !== 0 ? new Intl.NumberFormat("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}).format(v) : "—";
 
 // ── Persistent review storage ────────────────────────────────────────────
-// Each client has a single JSON blob in localStorage with shape:
-//   { "normalized desc 1": {reviewed:true, comments:"..."}, ... }
-// Normalization is aggressive (alphanumeric only) so small variations in the
-// AI's extracted text (spacing, punctuation, accents) still match the same key.
 const normalizeKey = (s) => (s||"")
   .toString()
   .normalize("NFD")
-  .replace(/[\u0300-\u036f]/g,"")  // strip accents
+  .replace(/[\u0300-\u036f]/g,"")
   .toLowerCase()
-  .replace(/[^a-z0-9]/g,"")        // alphanumeric only — max stability
+  .replace(/[^a-z0-9]/g,"")
   .slice(0,100);
 
-const reviewStoreKey = (client) => `clientReview:${normalizeKey(client)}`;
+const reviewStoreKey  = (client) => `clientReview:${normalizeKey(client)}`;
+const clientStateKey  = (client, year) => `clientState:${normalizeKey(client)}:${year}`;
 
 const loadReviewStore = (client) => {
-  try {
-    const raw = localStorage.getItem(reviewStoreKey(client));
-    return raw ? JSON.parse(raw) : {};
-  } catch(e) { return {}; }
+  try { const r=localStorage.getItem(reviewStoreKey(client)); return r?JSON.parse(r):{}; }
+  catch(e){ return {}; }
+};
+const saveReviewStore = (client, store) => {
+  try { localStorage.setItem(reviewStoreKey(client), JSON.stringify(store)); } catch(e){}
 };
 
-const saveReviewStore = (client, store) => {
-  try { localStorage.setItem(reviewStoreKey(client), JSON.stringify(store)); }
-  catch(e) {}
+// ── Full client state (all edits, moves, added items, debts, etc.) ────────
+const saveClientState = (data) => {
+  if (!data?.client || !data?.year) return;
+  try { localStorage.setItem(clientStateKey(data.client, data.year), JSON.stringify(data)); }
+  catch(e){ console.warn("localStorage full?", e); }
+};
+const loadClientState = (client, year) => {
+  try { const r=localStorage.getItem(clientStateKey(client,year)); return r?JSON.parse(r):null; }
+  catch(e){ return null; }
+};
+const clearClientState = (client, year) => {
+  try {
+    localStorage.removeItem(clientStateKey(client, year));
+    localStorage.removeItem(reviewStoreKey(client));
+  } catch(e){}
 };
 
 const hydrateItemsFromStore = (groups, client) => {
@@ -64,8 +74,6 @@ const hydrateItemsFromStore = (groups, client) => {
     items: g.items.map(item => {
       const k = normalizeKey(item.desc);
       const saved = store[k];
-      // Always wipe whatever comment the AI put in `comments` — comments should
-      // ONLY come from the user typing in the textarea (saved in localStorage).
       return {
         ...item,
         comments: saved?.comments || "",
@@ -337,6 +345,11 @@ function App(){
   const [step,setStep]=useState("auth-check");
   const [files,setFiles]=useState({dirpf:null,dcbe:null});
   const [data,setData]=useState(null);
+
+  // Auto-save full client state on every data change while in verify screen
+  useEffect(()=>{
+    if (data && step === "verify") saveClientState(data);
+  }, [data, step]);
   const [loading,setLoading]=useState(false);
   const [loadMsg,setLoadMsg]=useState("");
   const [error,setError]=useState("");
@@ -402,11 +415,23 @@ function App(){
       let parsed;
       try{ parsed = JSON.parse(body); }
       catch(e){ throw new Error("JSON inválido do backend: "+body.slice(0,150)); }
-      // Hydrate items with previously-saved review state and comments
-      if (parsed?.groups && parsed?.client) {
-        parsed.groups = hydrateItemsFromStore(parsed.groups, parsed.client);
+
+      // Check if we have a previously-saved full state for this client+year
+      const savedState = parsed?.client && parsed?.year
+        ? loadClientState(parsed.client, parsed.year) : null;
+      if (savedState) {
+        // Use the saved full state — preserves all edits, moves, added items, etc.
+        setData(savedState);
+        setRestoredToast(true);
+        setTimeout(()=>setRestoredToast(false), 2500);
+      } else {
+        // Fresh extraction — just hydrate review/comment fields from localStorage
+        if (parsed?.groups && parsed?.client) {
+          parsed.groups = hydrateItemsFromStore(parsed.groups, parsed.client);
+        }
+        setData(parsed);
       }
-      setData(parsed);setStep("verify");
+      setStep("verify");
     }catch(e){setError(e.message);}
     finally{setLoading(false);setLoadMsg("");}
   };
@@ -467,6 +492,7 @@ function App(){
 
   // Lightweight toast for "saved" feedback
   const [savedToast, setSavedToast] = useState(false);
+  const [restoredToast, setRestoredToast] = useState(false);
   const showSavedToast = () => {
     setSavedToast(true);
     setTimeout(()=>setSavedToast(false), 1400);
@@ -676,7 +702,15 @@ function App(){
           <button className="bg" style={{background:C.gold,color:"#080C14",padding:"13px 30px",borderRadius:8,border:"none",cursor:(files.dirpf||files.dcbe)&&!loading?"pointer":"not-allowed",fontFamily:"'Nunito Sans',sans-serif",fontWeight:700,fontSize:14,letterSpacing:"0.05em",opacity:(files.dirpf||files.dcbe)&&!loading?1:0.4}} onClick={processFiles}>
             {loading?<span style={{display:"flex",alignItems:"center",gap:8}}><span style={{width:13,height:13,border:"2px solid rgba(0,0,0,.3)",borderTopColor:"#000",borderRadius:"50%",animation:"spin .8s linear infinite",display:"inline-block"}}/>{loadMsg||"Processando..."}</span>:"→ Processar Arquivos PDF"}
           </button>
-          <button className="gh" style={{background:"transparent",color:C.muted,padding:"13px 22px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>{setData({...DEMO, groups: hydrateItemsFromStore(DEMO.groups, DEMO.client)});setStep("verify");}}>Usar Dados Demo</button>
+          <button className="gh" style={{background:"transparent",color:C.muted,padding:"13px 22px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>{
+            const saved = loadClientState(DEMO.client, DEMO.year);
+            if (saved) {
+              setData(saved); setRestoredToast(true); setTimeout(()=>setRestoredToast(false),2500);
+            } else {
+              setData({...DEMO, groups: hydrateItemsFromStore(DEMO.groups, DEMO.client)});
+            }
+            setStep("verify");
+          }}>Usar Dados Demo</button>
         </div>
         <p style={{textAlign:"center",color:C.dim,fontSize:11,lineHeight:1.6}}>Os documentos são processados via API e não são armazenados.<br/>Também é possível carregar apenas um dos dois arquivos.</p>
       </div>
@@ -688,13 +722,11 @@ function App(){
       <style>{style}</style>
       {/* Saved toast */}
       {savedToast && (
-        <div style={{
-          position:"fixed", bottom:24, right:24, zIndex:9999,
-          background:"#4CAF50", color:"#fff",
-          padding:"10px 18px", borderRadius:8,
-          fontFamily:"'Nunito Sans',sans-serif", fontSize:12, fontWeight:700,
-          letterSpacing:"0.05em", boxShadow:"0 6px 24px rgba(76,175,80,.4)",
-        }}>✓ Salvo</div>
+        <div style={{position:"fixed",bottom:24,right:24,zIndex:9999,background:"#4CAF50",color:"#fff",padding:"10px 18px",borderRadius:8,fontFamily:"'Nunito Sans',sans-serif",fontSize:12,fontWeight:700,letterSpacing:"0.05em",boxShadow:"0 6px 24px rgba(76,175,80,.4)"}}>✓ Salvo</div>
+      )}
+      {/* Restored toast */}
+      {restoredToast && (
+        <div style={{position:"fixed",bottom:24,right:24,zIndex:9999,background:"#4A90D9",color:"#fff",padding:"10px 18px",borderRadius:8,fontFamily:"'Nunito Sans',sans-serif",fontSize:12,fontWeight:700,letterSpacing:"0.05em",boxShadow:"0 6px 24px rgba(74,144,217,.4)"}}>↩ Sessão restaurada</div>
       )}
       <div style={{maxWidth:980,margin:"0 auto"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24,flexWrap:"wrap",gap:12}}>
@@ -709,8 +741,8 @@ function App(){
               style={{background:"transparent",color:C.muted,padding:"10px 14px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:11}}
               onClick={()=>{
                 if (!data?.client) return;
-                if (confirm(`Apagar todas as revisões e comentários salvos de ${data.client}?\n\nIsto remove os dados deste navegador (não afeta outros usuários).`)) {
-                  try { localStorage.removeItem(reviewStoreKey(data.client)); } catch(e) {}
+                if (confirm(`Apagar todas as revisões, comentários e edições salvas de ${data.client} (${data.year})?\n\nIsto remove os dados deste navegador. A próxima extração começará do zero.`)) {
+                  clearClientState(data.client, data.year);
                   setData(prev => ({
                     ...prev,
                     groups: prev.groups.map(g => ({
