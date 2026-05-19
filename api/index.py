@@ -61,16 +61,21 @@ def auth(x_hsa_password: str | None = Header(default=None)) -> None:
 
 
 EXTRACT_PROMPT = """Extraia todos os bens, direitos e informações familiares deste(s) documento(s) e retorne APENAS JSON válido (sem markdown, sem ```):
-{"client":"NOME COMPLETO","cpf":"000.000.000-00","year":2024,"spouse":{"name":"","cpf":"","marriage_regime":"","marriage_date":"","certificate_registry":""},"dependents":[{"name":"","cpf":"","birth_date":"","relationship":""}],"groups":[{"name":"categoria","jurisdiction":"Brasil ou Offshore","items":[{"id":1,"desc":"descrição do ativo","loc":"cidade/país","subcategory":"","subsubcategory":"","dirpf":valor_numerico_ou_null,"dcbe":valor_numerico_ou_null,"comments":""}]}],"debts":[{"id":1,"desc":"descrição da dívida","subcategory":"","subsubcategory":"","value":valor_numerico}]}
+{"client":"NOME COMPLETO","cpf":"000.000.000-00","year":2024,"spouse":{"name":"","cpf":"","marriage_regime":"","marriage_date":"","certificate_registry":""},"dependents":[{"name":"","cpf":"","birth_date":"","relationship":""}],"groups":[{"name":"categoria","jurisdiction":"Brasil ou Offshore","items":[{"id":1,"desc":"descrição do ativo","loc":"cidade/país","subcategory":"","subsubcategory":"","confidence":"high|low","dirpf":valor_numerico_ou_null,"dcbe":valor_numerico_ou_null,"comments":""}]}],"debts":[{"id":1,"desc":"descrição da dívida","subcategory":"","subsubcategory":"","confidence":"high|low","value":valor_numerico}]}
 
 REGRAS CRÍTICAS:
-1. DIRPF — use SEMPRE o valor do resumo por grupo (ex: "Total Grupo 01 Bens Imóveis = R$ 45.340.841,37"). NÃO some itens individuais — use o total oficial do grupo diretamente.
-2. Se um grupo tem itens individuais E um total, crie UM item por grupo usando o TOTAL OFICIAL.
+1. EXTRAIA ITEM POR ITEM — não use o total do grupo. Crie UM item para CADA bem listado nos PDFs, com sua descrição completa e valor individual em 31/12 do ano da declaração.
+2. Se a soma dos itens individuais não bater exatamente com o "Total Grupo X" do DIRPF, mantenha os valores individuais como foram declarados (a diferença pode ser ajustes do meio do ano).
 3. jurisdiction = "Brasil" ou "Offshore"; dirpf = valor em R$ da DIRPF; dcbe = valor em USD da DCBE
-4. Inclua dívidas da Ficha 8 no array "debts"; cônjuge da Ficha 2 em "spouse"; dependentes da Ficha 3
-5. JSON 100% completo e fechado. Valores SEMPRE numéricos com centavos exatos.
+4. Inclua dívidas da Ficha 8 no array "debts" (uma entrada por dívida)
+5. Inclua cônjuge da Ficha 2 em "spouse"; dependentes da Ficha 3
+6. JSON 100% completo e fechado. Valores SEMPRE numéricos com centavos exatos.
 
-CLASSIFICAÇÃO EM 3 NÍVEIS — Para cada item, escolha o GRUPO (campo "name"), a SUBCATEGORIA (campo "subcategory") e quando aplicável o SUB-ITEM (campo "subsubcategory"). Se não conseguir identificar com certeza pela descrição, deixe "" (string vazia). NUNCA invente.
+CLASSIFICAÇÃO OBRIGATÓRIA (3 níveis) — Para cada item, ESCOLHA OBRIGATORIAMENTE a melhor opção (nunca deixe em branco):
+- name: grupo (nível 1)
+- subcategory: subcategoria do grupo (nível 2)
+- subsubcategory: instrumento/sub-item (nível 3) — só preenche se a subcategoria tiver sub-itens listados abaixo
+- confidence: "high" se a descrição deixa CLARO a subcategoria/instrumento; "low" se você teve que CHUTAR a opção mais provável.
 
 GRUPOS válidos para "name":
 "Bens Imóveis" | "Bens Móveis" | "Participações Societárias" | "Aplicações e Investimentos" | "Previdência Privada" | "Créditos e Direitos" | "Contas Bancárias e Saldos" | "Criptoativos" | "Remuneração Variável em Equity"
@@ -78,10 +83,13 @@ GRUPOS válidos para "name":
 SUBCATEGORIAS e SUB-ITENS por grupo:
 
 • Bens Imóveis → subcategory ∈ {"Residenciais","Comerciais e Industriais","Rurais","Outros"}; subsubcategory = ""
+  Dica: apartamento/casa = Residenciais; loja/sala/galpão = Comerciais; fazenda/sítio = Rurais.
 
 • Bens Móveis → subcategory ∈ {"Veículos","Aviação e Náutica","Arte, Joias e Coleções","Outros","NFT / Ativo Digital Não Fungível"}; subsubcategory = ""
+  Dica: carro/moto = Veículos; barco/iate/avião = Aviação e Náutica; obras de arte/joias = Arte, Joias e Coleções.
 
 • Participações Societárias → subcategory ∈ {"Empresa operacional — sócio majoritário / controlador","Empresa operacional — sócio minoritário","Holding patrimonial pura","Holding mista (patrimonial + operacional)","Sociedade em Conta de Participação (SCP)","Participação em startup / empresa anjo","Mercado de Capitais","Participação em empresa no exterior (LLC, offshore, BVI, Cayman)","Trust no exterior (Lei 14.754/23)"}; subsubcategory = ""
+  Dica: ações negociadas em bolsa (Petrobras, Vale, etc) = Mercado de Capitais; holding offshore = Participação em empresa no exterior.
 
 • Aplicações e Investimentos → subcategory ∈ {"Renda Fixa","Fundos","Renda Variável","Alta Liquidez"}; subsubcategory:
   - Se "Renda Fixa": ∈ {"CDB / RDB","LCI / LCA (isentos de IR para PF)","LIG — Letra Imobiliária Garantida","LC — Letra de Câmbio","CRI / CRA (isentos de IR para PF)","Debêntures (quando ativo)","Debêntures incentivadas (infraestrutura — isentas de IR)","COE — Certificado de Operações Estruturadas","DPGE — Depósito a Prazo com Garantia Especial","Tesouro Selic / Prefixado / IPCA+"}
@@ -106,11 +114,16 @@ SUBCATEGORIAS e SUB-ITENS por grupo:
   - Se "Phantom / Sintéticos": ∈ {"Phantom Shares","SAR — Stock Appreciation Rights","Bônus atrelado a performance (cash-settled)"}
   - Se "Startups": ∈ {"Opção de compra em startup","Vesting em empresa não listada","SAFE — Simple Agreement for Future Equity","Nota conversível"}
 
-DÍVIDAS (array "debts") — também classificadas:
-• Para CADA dívida, "subcategory" ∈ {"Financiamentos","Empréstimos","Outros Passivos"} e "subsubcategory":
-  - Se "Financiamentos": ∈ {"Financiamento imobiliário (SFH, SFI, alienação fiduciária)","Financiamento de veículo / bem móvel"}
-  - Se "Empréstimos": ∈ {"Empréstimo bancário (pessoal, consignado)","Empréstimo de pessoa física (sócio, familiar)","Empréstimo de pessoa jurídica (empresa do grupo)"}
-  - Se "Outros Passivos": ∈ {"Debêntures emitidas","Parcelamento fiscal (REFIS)","Garantia prestada (aval, fiança)","Dívida no exterior"}"""
+DÍVIDAS (array "debts") — também classificadas com subcategory + subsubcategory + confidence:
+  - "Financiamentos": ∈ {"Financiamento imobiliário (SFH, SFI, alienação fiduciária)","Financiamento de veículo / bem móvel"}
+  - "Empréstimos": ∈ {"Empréstimo bancário (pessoal, consignado)","Empréstimo de pessoa física (sócio, familiar)","Empréstimo de pessoa jurídica (empresa do grupo)"}
+  - "Outros Passivos": ∈ {"Debêntures emitidas","Parcelamento fiscal (REFIS)","Garantia prestada (aval, fiança)","Dívida no exterior"}
+
+CONFIDENCE — Use "low" quando:
+- A descrição é genérica ("Outros bens", "Investimento", "Cotas")
+- Há ambiguidade entre 2+ opções
+- Você teve que inferir o tipo por contexto fraco
+Use "high" quando a descrição menciona claramente o instrumento ("CDB Banco BTG", "Apartamento Pinheiros", "Ações Petrobras", "BTC")."""
 
 EXTRACT_SYSTEM = (
     "Especialista em declarações fiscais brasileiras. "
@@ -154,7 +167,7 @@ async def extract(
 
     payload = {
         "model": ANTHROPIC_MODEL,
-        "max_tokens": 16000,
+        "max_tokens": 32000,
         "system": EXTRACT_SYSTEM,
         "messages": [{"role": "user", "content": content}],
     }
