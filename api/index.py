@@ -35,7 +35,6 @@ sys.path.insert(0, _os_path.path.join(_os_path.path.dirname(__file__), "lib"))
 import deck_builder
 import excel_builder
 
-
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 HSA_PASSWORD      = os.environ.get("HSA_PASSWORD", "")
 CORS_ORIGINS      = os.environ.get("CORS_ORIGINS", "*").split(",")
@@ -261,7 +260,7 @@ def _build_single_slide(data: dict, keep_idx: int, kind: str) -> Path:
 def build_orgchart_patrimonial_endpoint(body: BuildBody):
     data = body.model_dump()
     try:
-        out_path = _build_single_slide(data, keep_idx=4, kind="orgchart-patrimonial")
+        out_path = _build_single_slide(data, keep_idx=3, kind="orgchart-patrimonial")
     except HTTPException:
         raise
     except Exception as e:
@@ -278,7 +277,7 @@ def build_orgchart_patrimonial_endpoint(body: BuildBody):
 def build_orgchart_familiar_endpoint(body: BuildBody):
     data = body.model_dump()
     try:
-        out_path = _build_single_slide(data, keep_idx=5, kind="orgchart-familiar")
+        out_path = _build_single_slide(data, keep_idx=4, kind="orgchart-familiar")
     except HTTPException:
         raise
     except Exception as e:
@@ -289,4 +288,3 @@ def build_orgchart_familiar_endpoint(body: BuildBody):
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         filename=_safe_filename(data.get("client", ""), "ORGANOGRAMA_FAMILIAR", "pptx"),
     )
-
