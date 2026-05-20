@@ -1263,8 +1263,11 @@ function App(){
           </div>
         )}
 
-        {/* ── Dívidas e Ônus Reais ──────────────────────────────────────── */}
-        {(() => {
+        {/* ── Dívidas e Ônus Reais ──────────────────────────────────────
+            Only shown in the "Todos" view since dívidas are a global concept
+            that doesn't belong to any specific asset category. Same for the
+            Patrimônio Líquido card below (it's a global summary). */}
+        {activeCat === "Todos" && (() => {
           const debts = data?.debts || [];
           const totDebts = debts.reduce((a,d)=>a+(d.value||0),0);
           const netWorth = totDIRPF - totDebts;
