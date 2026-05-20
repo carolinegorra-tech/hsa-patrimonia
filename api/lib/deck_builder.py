@@ -21159,14 +21159,9 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
         (Inches(9.70), Inches(5.20), "right", Inches(9.70),              Inches(5.20)+CALLOUT_H//2),  # right-bot
     ]
 
-    def _slot_angle(slot):
-        _, _, _, ax, ay = slot
-        dx = ax - PIE_CX; dy = ay - PIE_CY
-        a = _math.atan2(dx, -dy)
-        return a if a >= 0 else a + 2*_math.pi
-    slot_angles = [_slot_angle(s) for s in SLOTS]
-
-    # Pie slice midangles (0 = 12 o'clock, CW)
+    # Pie slice midangles (0 = 12 o'clock, CW). Slices are drawn in the
+    # order of br_sorted (largest first), so index i corresponds to the
+    # i-th slice on the pie going CW from 12 o'clock.
     _total_vals = sum(v for _, v in br_sorted[:6]) or 1
     slice_midangles = []
     _cum = 0
@@ -21174,22 +21169,51 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
         slice_midangles.append((_cum + _v/2) / _total_vals * 2 * _math.pi)
         _cum += _v
 
-    def _ang_dist(a, b):
-        d = abs(a - b) % (2*_math.pi)
-        return min(d, 2*_math.pi - d)
+    # ── ORDER-BASED SLOT ASSIGNMENT ──
+    # Greedy nearest-angle assignment fails when several small slices cluster
+    # near the same pie angle (e.g. BENS MÓVEIS + CONTAS both at 12 o'clock):
+    # both want the same slot, the loser ends up with a leader that has to
+    # cross another callout to reach its slice.
+    #
+    # New approach: assign slots in the SAME CW ORDER as the slices appear
+    # on the pie. With order-preserving assignment, two leaders can never
+    # cross each other regardless of how the slices are distributed.
+    n_slices = len(br_sorted[:6])
 
-    # Greedy: bigger slices claim their preferred slot first.
-    slice_order = sorted(range(len(br_sorted[:6])), key=lambda i: -br_sorted[i][1])
+    # Step 1: tentative side per slice based on midangle. Left half of the
+    # pie (180°–360°) feeds the left column; right half feeds the right.
+    sides_arr = ['left' if _math.pi < m <= 2*_math.pi else 'right'
+                  for m in slice_midangles[:n_slices]]
+    left_idxs  = [i for i, s in enumerate(sides_arr) if s == 'left']
+    right_idxs = [i for i, s in enumerate(sides_arr) if s == 'right']
+
+    # Step 2: rebalance — at most 3 slices per side. Slices to move across
+    # are the ones closest to the top wrap (midangle near 0°/360°) since
+    # their callouts work naturally on either side.
+    while len(left_idxs) > 3:
+        mv = min(left_idxs, key=lambda i: 2*_math.pi - slice_midangles[i])
+        sides_arr[mv] = 'right'; left_idxs.remove(mv); right_idxs.append(mv)
+    while len(right_idxs) > 3:
+        mv = min(right_idxs, key=lambda i: slice_midangles[i])
+        sides_arr[mv] = 'left'; right_idxs.remove(mv); left_idxs.append(mv)
+
+    # Step 3: order within each side so the topmost slot gets the slice
+    # whose CW position is closest to 12 o'clock.
+    # LEFT: midangle DESC (higher midangle = closer to 360° = top-left).
+    # RIGHT: midangle ASC with wrap (midangles > 180° wrap negative so
+    # near-top slices come first).
+    left_idxs.sort(key=lambda i: -slice_midangles[i])
+    right_idxs.sort(key=lambda i: slice_midangles[i] - 2*_math.pi
+                                   if slice_midangles[i] > _math.pi
+                                   else slice_midangles[i])
+
+    LEFT_SLOT_INDICES  = [0, 1, 2]   # left-top, left-mid, left-bot
+    RIGHT_SLOT_INDICES = [3, 4, 5]   # right-top, right-mid, right-bot
     slice_to_slot = {}
-    used = set()
-    for si in slice_order:
-        best, bestd = None, float('inf')
-        for sj in range(len(SLOTS)):
-            if sj in used: continue
-            d = _ang_dist(slice_midangles[si], slot_angles[sj])
-            if d < bestd: bestd, best = d, sj
-        slice_to_slot[si] = best
-        used.add(best)
+    for k, i in enumerate(left_idxs):
+        slice_to_slot[i] = LEFT_SLOT_INDICES[k]
+    for k, i in enumerate(right_idxs):
+        slice_to_slot[i] = RIGHT_SLOT_INDICES[k]
 
     def _add_arrow_tail(conn):
         ln = conn.line._get_or_add_ln()
@@ -21215,80 +21239,20 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
         slice_color = NAVY_SHADES[i % len(NAVY_SHADES)]
         ang = slice_midangles[i]
 
-        # Leader segment 1: slice midpoint → radial extension point.
-        # For severe angle mismatch we STRETCH the radial extension so it
-        # lands at a high "shelf" above the top-band callouts; this keeps
-        # the CONTAS leader's horizontal segment ABOVE the BENS MÓVEIS
-        # callout, instead of running at the same y as BENS MÓVEIS' leader.
-        ELBOW_THRESHOLD     = _math.radians(45)
-        TALL_ELBOW_THRESHOLD = _math.radians(70)
-        slot_ang = slot_angles[slot_idx]
-        mismatch = _ang_dist(ang, slot_ang)
-        use_elbow = mismatch > ELBOW_THRESHOLD
-        use_tall  = mismatch > TALL_ELBOW_THRESHOLD
-
+        # Two-segment leader: short radial extension out of the pie, then
+        # straight line to the callout anchor. With order-based slot
+        # assignment the direct line never crosses the pie and never
+        # overlaps another leader, so no elbows or shelves needed.
         s1x = PIE_CX + int(_math.sin(ang) * PIE_R)
         s1y = PIE_CY - int(_math.cos(ang) * PIE_R)
-
-        if use_tall:
-            # Tall L: stretch the radial so s2 lands JUST above (or below)
-            # the pie, so the horizontal "shelf" segment hugs the pie's
-            # edge instead of escaping all the way up to the slide header.
-            # Visually this places the upper portion of the leader BELOW
-            # the top-band callouts' title text (BENS IMÓVEIS / BENS MÓVEIS),
-            # which is what the user wants.
-            if s1y < PIE_CY:
-                target_y = PIE_Y - Inches(0.15)
-                dy_needed = PIE_CY - target_y
-                cos_a = _math.cos(ang)
-            else:
-                target_y = PIE_Y + PIE_DIA + Inches(0.15)
-                dy_needed = target_y - PIE_CY
-                cos_a = -_math.cos(ang)
-            # Distance along the radial vector that yields the desired |dy|.
-            # For slices near the side of the pie (cos near 0) the radial
-            # would have to extend almost forever, so we fall back to a
-            # safe fixed length and let segment 2 absorb the rest.
-            if cos_a > 0.15:
-                radial_dist = dy_needed / cos_a
-            else:
-                radial_dist = PIE_R + Inches(0.30)
-            s2x = PIE_CX + int(_math.sin(ang) * radial_dist)
-            s2y = PIE_CY - int(_math.cos(ang) * radial_dist)
-        else:
-            s2x = PIE_CX + int(_math.sin(ang) * (PIE_R + RADIAL_EXT))
-            s2y = PIE_CY - int(_math.cos(ang) * (PIE_R + RADIAL_EXT))
+        s2x = PIE_CX + int(_math.sin(ang) * (PIE_R + RADIAL_EXT))
+        s2y = PIE_CY - int(_math.cos(ang) * (PIE_R + RADIAL_EXT))
 
         c1 = sl.shapes.add_connector(1, int(s1x), int(s1y), int(s2x), int(s2y))
         c1.line.color.rgb = RGBColor.from_string(slice_color); c1.line.width = Pt(1.5)
-
-        # Routing from radial extension to callout anchor.
-        if use_elbow:
-            if use_tall:
-                # s2 is already at the high shelf; horizontal segment runs
-                # right along it.
-                shelf_y = s2y
-            elif s2y < PIE_CY:
-                shelf_y = min(s2y, PIE_Y - Inches(0.10))
-            else:
-                shelf_y = max(s2y, PIE_Y + PIE_DIA + Inches(0.10))
-            if ax > PIE_CX:
-                elbow_x = PIE_X + PIE_DIA + Inches(0.05)
-            else:
-                elbow_x = PIE_X - Inches(0.05)
-            elbow_pt = (int(elbow_x), int(shelf_y))
-            c2 = sl.shapes.add_connector(1, int(s2x), int(s2y),
-                                            elbow_pt[0], elbow_pt[1])
-            c2.line.color.rgb = RGBColor.from_string(slice_color); c2.line.width = Pt(1.5)
-            c3 = sl.shapes.add_connector(1, elbow_pt[0], elbow_pt[1],
-                                            int(ax), int(ay))
-            c3.line.color.rgb = RGBColor.from_string(slice_color); c3.line.width = Pt(1.5)
-            _add_arrow_tail(c3)
-        else:
-            # Low mismatch — clean direct diagonal is fine.
-            c2 = sl.shapes.add_connector(1, int(s2x), int(s2y), int(ax), int(ay))
-            c2.line.color.rgb = RGBColor.from_string(slice_color); c2.line.width = Pt(1.5)
-            _add_arrow_tail(c2)
+        c2 = sl.shapes.add_connector(1, int(s2x), int(s2y), int(ax), int(ay))
+        c2.line.color.rgb = RGBColor.from_string(slice_color); c2.line.width = Pt(1.5)
+        _add_arrow_tail(c2)
 
         # Callout text: bullet + name on line 1, value + % on line 2,
         # up to 2 strategy hyperlinks on lines 3-4.
