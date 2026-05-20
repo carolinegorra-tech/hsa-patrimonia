@@ -20442,18 +20442,6 @@ def brazil_flag(sl,cx,cy,w=300_000):
     # blue circle
     cir = int(h*0.40)
     O(sl, cx-cir//2, cy-cir//2, cir, cir, fill=BR_BLUE)
-    # White "Ordem e Progresso" diagonal band across the blue circle. Drawn
-    # as a thin line that sweeps slightly upward from left to right, matching
-    # the real flag's banner curve. Stroke width scales with circle size so
-    # the band stays visible on both the large hub flag and the small
-    # asset-box flags.
-    band_inset = int(cir * 0.08)
-    bx1 = cx - cir//2 + band_inset
-    by1 = cy + int(cir * 0.12)
-    bx2 = cx + cir//2 - band_inset
-    by2 = cy - int(cir * 0.05)
-    band_pt = max(1.0, cir / 50_000)  # ~1pt for tiny flags, ~1.7pt for hub flag
-    L(sl, bx1, by1, bx2, by2, col=WHITE, w=band_pt)
 
 # ════════════════════════════════════════════════════════════════════════════
 # ASSET ICONS — simple monochrome vector icons drawn from MSO primitives.
@@ -21011,7 +20999,7 @@ def _add_indice_slide(prs, theme_label: str, accent_color, strategies):
                 # like GOVERNANÇA end up visually glued to the last item of
                 # the previous subtema.
                 if not first_sub:
-                    cursor_y += Inches(0.18)
+                    cursor_y += Inches(0.40)
                 first_sub = False
                 tb = sl.shapes.add_textbox(x, cursor_y, COL_W, LINE_H).text_frame
                 tb.margin_left = tb.margin_top = tb.margin_bottom = 0
