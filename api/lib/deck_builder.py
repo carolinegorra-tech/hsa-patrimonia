@@ -20702,6 +20702,71 @@ def _slide_anchor_id(strategy_name: str) -> str:
     return s[:60]
 
 
+def _clone_chrome_from_template(prs, target_slide):
+    """Clone the standard HSA chrome from a template slide onto `target_slide`.
+    The chrome is the set of shapes that appears identically on every main
+    deck slide: PATRIMON.IA header text (Text 7), the HSA logo box, the navy
+    footer band with decorative waves (Picture 10), the wave decoration top
+    (Picture 2), the CONFIDENCIAL footer text (Text Box65), and the slide-
+    number placeholder (TextBox 13).
+
+    Without this, strategy/index slides looked synthetic (rectangles + plain
+    text instead of the real wave artwork) and stood out as foreign. After
+    this, slides 7-N share the exact same chrome as slides 2-6.
+
+    Image relationships (Picture 2/10's <a:blip r:embed="...">) are also
+    copied so the artwork actually renders on the new slide — without that,
+    the pictures resolve to a broken rId.
+    """
+    from copy import deepcopy
+    from pptx.oxml.ns import qn
+    CHROME_NAMES = {"Picture 10", "Picture 2", "TextBox 13",
+                    "Text Box65", "Text Box62"}
+    # NOTE: "Text 7" intentionally excluded — that's the "DETALHAMENTO DOS
+    # ATIVOS" section title which only belongs on the main 6 slides.
+    # Strategy slides draw their own theme tag (PLANEJAMENTO PATRIMONIAL /
+    # SUCESSÓRIO) higher up.
+    # Use slide 3 (index 2) as the chrome source — it has the full chrome
+    # set including the navy footer band. Fall back to slide 0 otherwise.
+    src = prs.slides[2] if len(prs.slides) >= 3 else prs.slides[0]
+    src_part = src.part
+    dst_part = target_slide.part
+    spTree = target_slide.shapes._spTree
+
+    # Where to insert new shapes — before any <p:extLst> child, per OOXML
+    # schema order. If no extLst, append at end (which is then guaranteed
+    # to also be schema-valid).
+    extLst = spTree.find(qn('p:extLst'))
+
+    for sh in src.shapes:
+        if sh.name not in CHROME_NAMES:
+            continue
+        new_el = deepcopy(sh.element)
+
+        # Fix image references: <a:blip r:embed="rIdX"> points to a media
+        # part via the SOURCE slide's rels; on the destination we need a
+        # NEW rId pointing to the same underlying part.
+        for blip in new_el.iter(qn('a:blip')):
+            embed_id = blip.get(qn('r:embed'))
+            if embed_id and embed_id in src_part.rels:
+                src_rel = src_part.rels[embed_id]
+                new_rId = dst_part.relate_to(src_rel.target_part, src_rel.reltype)
+                blip.set(qn('r:embed'), new_rId)
+
+        # Fix any hyperlinks (a:hlinkClick uses r:id) the same way.
+        for hl in new_el.iter(qn('a:hlinkClick')):
+            rid = hl.get(qn('r:id'))
+            if rid and rid in src_part.rels:
+                src_rel = src_part.rels[rid]
+                new_rId = dst_part.relate_to(src_rel.target_part, src_rel.reltype)
+                hl.set(qn('r:id'), new_rId)
+
+        if extLst is not None:
+            extLst.addprevious(new_el)
+        else:
+            spTree.append(new_el)
+
+
 def _append_blank_slide_layout(prs):
     """Add a 16:9 blank slide and return it. Uses the master layout 6 (blank)
     when available; falls back to layout 0."""
@@ -20762,7 +20827,7 @@ def _add_strategy_sketch_slide(prs, strategy_name: str, accent_color, theme_labe
     """
     sl = _append_blank_slide_layout(prs)
     prs_w = prs.slide_width; prs_h = prs.slide_height
-    _draw_strategy_chrome(sl, prs_w, prs_h)
+    _clone_chrome_from_template(prs, sl)
 
     # Theme tag (small, above title)
     tag = sl.shapes.add_textbox(Inches(0.45), Inches(1.10), Inches(7), Inches(0.30)).text_frame
@@ -20846,7 +20911,7 @@ def _add_indice_slide(prs, theme_label: str, accent_color, strategies):
     (wired in second pass)."""
     sl = _append_blank_slide_layout(prs)
     prs_w = prs.slide_width; prs_h = prs.slide_height
-    _draw_strategy_chrome(sl, prs_w, prs_h)
+    _clone_chrome_from_template(prs, sl)
 
     # Theme tag
     tag = sl.shapes.add_textbox(Inches(0.45), Inches(1.10), prs_w - Inches(0.90), Inches(0.30)).text_frame
@@ -21070,9 +21135,12 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
     from pptx.oxml.ns import qn
     import math
 
-    # Lighter strategy colors for legibility on white
-    STRAT_BLUE_DARK   = RGBColor(0x2D, 0x5C, 0x7F)
-    STRAT_YELLOW_DARK = RGBColor(0xB8, 0xA6, 0x10)
+    # Strategy theme colors for the hyperlinks beneath each callout. The
+    # yellow is darkened from the brand LIME (#E4E51F) so it reads as a
+    # clearly-yellow text on white without becoming illegible. Patrimonial
+    # uses the dark steel blue that matches the bottom button.
+    STRAT_BLUE_DARK   = RGBColor(0x1F, 0x4E, 0x79)  # deeper navy-blue
+    STRAT_YELLOW_DARK = RGBColor(0x9C, 0x7A, 0x00)  # rich gold, clearly yellow
 
     # Wipe ONLY the old data shapes (chart + value table); keep all chrome
     # (Picture 2/10 patterns, PATRIMON.IA, COMPOSIÇÃO PATRIMONIAL title,
@@ -21234,7 +21302,7 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
         tf.margin_left = tf.margin_right = tf.margin_top = tf.margin_bottom = 0
         return tf
 
-    callout_strategy_runs = []
+    callout_strategy_shapes = []   # (textbox_shape, strategy_name)
     RADIAL_EXT = Inches(0.40)
 
     for i, (name, val) in enumerate(br_sorted[:6]):
@@ -21280,10 +21348,17 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
         # Strategy hyperlinks — up to 2, beneath the value line. Direction
         # arrow (›/‹) matches the callout's side so the eye knows which
         # text is clickable and which way it "points" into the index slide.
+        # IMPORTANT: the hyperlink is attached to the textbox SHAPE (cNvPr),
+        # NOT to the text run. If it were on the run, PowerPoint would
+        # substitute the run's text colour with the theme's hyperlink
+        # colour, wiping out the gold/blue distinction we set below.
         strategies = CATEGORY_STRATEGIES.get(name, [])[:2]
         for j, (sname, theme) in enumerate(strategies):
             s_y = cy + Inches(0.56) + j * Inches(0.20)
-            stf = _fixed_tf(cx, s_y, CALLOUT_W, Inches(0.20))
+            stx_shape = sl.shapes.add_textbox(cx, s_y, CALLOUT_W, Inches(0.20))
+            stf = stx_shape.text_frame
+            stf.auto_size = MSO_AUTO_SIZE.NONE; stf.word_wrap = True
+            stf.margin_left = stf.margin_right = stf.margin_top = stf.margin_bottom = 0
             p = stf.paragraphs[0]; p.alignment = align
             color = STRAT_BLUE_DARK if theme == "patrimonial" else STRAT_YELLOW_DARK
             if side == "right":
@@ -21295,7 +21370,7 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
             rs = p.add_run(); rs.text = txt
             rs.font.name = "Gotham SSm Bold"; rs.font.size = Pt(8); rs.font.color.rgb = color; rs.font.bold = True
             rs.font.underline = True
-            callout_strategy_runs.append((rs, sname))
+            callout_strategy_shapes.append((stx_shape, sname))
 
     # ── 2 big bottom buttons ──
     BTN_W = Inches(3.5); BTN_H = Inches(0.50)
@@ -21324,12 +21399,20 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
     # slide 2's footer now matches slides 3+.
 
     # ── Wire hyperlinks ──
-    # Strategy runs in callouts → individual strategy slides
-    for run, strategy_name in callout_strategy_runs:
+    # Strategy textboxes → individual strategy slides. We attach hlinkClick
+    # to the SHAPE (cNvPr) rather than to the text run. This is the only
+    # reliable way to keep our custom gold/blue text colour: PowerPoint
+    # substitutes the theme's hyperlink colour for any run with hlinkClick
+    # but leaves the text alone when the hyperlink lives on the parent
+    # shape. The shape stays fully clickable (the cursor still turns into
+    # a hand when hovering the text), so the user experience is identical.
+    for shape, strategy_name in callout_strategy_shapes:
         target = strategy_slides.get(strategy_name)
         if target is not None:
-            _internal_hyperlink(sl, run, target)
-    # Bottom buttons → indices
+            _shape_internal_hyperlink(sl, shape, target)
+    # Bottom buttons → indices. These keep run-level hyperlinks since the
+    # button shapes have a solid fill behind the text and the substituted
+    # hyperlink colour is barely visible there.
     _internal_hyperlink(sl, btn_p_run, indice_p)
     _internal_hyperlink(sl, btn_s_run, indice_s)
 
@@ -21340,6 +21423,32 @@ def _brl_short(v):
     if v >= 1_000_000:     return f"R$ {v/1e6:.1f}M"
     if v >= 1_000:         return f"R$ {v/1e3:.0f}K"
     return f"R$ {v:,.0f}".replace(",", ".")
+
+
+def _shape_internal_hyperlink(slide, shape, target_slide):
+    """Attach a hyperlink to a SHAPE rather than to a text run. This avoids
+    PowerPoint's theme-hyperlink-colour substitution, which only acts on
+    runs that carry <a:hlinkClick>. The hyperlink lives on the shape's
+    <p:cNvPr> element, so the entire shape (including its text) is
+    clickable but the text retains its explicitly-set colour."""
+    from pptx.oxml.ns import qn
+    from lxml import etree as _ET
+    target_part = target_slide.part
+    rId = slide.part.relate_to(
+        target_part,
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide'
+    )
+    # Walk down into the shape's nvSpPr to find <p:cNvPr>. Different shape
+    # types (autoshape, textbox, picture) all have one cNvPr near the top.
+    cNvPr = shape._element.find('.//' + qn('p:cNvPr'))
+    if cNvPr is None:
+        return
+    # Remove any prior hlinkClick on this shape, then add the new one.
+    for h in cNvPr.findall(qn('a:hlinkClick')):
+        cNvPr.remove(h)
+    hlink = _ET.SubElement(cNvPr, qn('a:hlinkClick'))
+    hlink.set(qn('r:id'), rId)
+    hlink.set('action', 'ppaction://hlinksldjump')
 
 
 def _internal_hyperlink(slide, run, target_slide):
