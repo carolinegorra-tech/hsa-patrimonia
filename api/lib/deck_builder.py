@@ -21026,7 +21026,12 @@ CATEGORY_STRATEGIES = {
     "Créditos e Direitos": [
         ("Mútuo (empréstimo entre partes relacionadas)", "patrimonial"),
     ],
-    "Contas Bancárias e Saldos": [],
+    # Both name variants get the same strategies: some DIRPF ingestion
+    # pipelines emit "Contas Bancárias" (the bare DIRPF group name) and
+    # others emit "Contas Bancárias e Saldos" (with the suffix appended).
+    "Contas Bancárias e Saldos": [
+        ("Seguro de Vida (como ferramenta de liquidez sucessória)", "sucessorio"),
+    ],
     # JSON-name match for ordinary bank accounts. Seguro de Vida is the
     # liquidity-bridging successoral tool that lawyers typically pair with
     # heavily liquid asset classes.
