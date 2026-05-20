@@ -21972,94 +21972,103 @@ def build_deck(data, output_path):
                 ch.category_axis.tick_labels.font.name = 'Gotham SSm Black'
             except Exception: pass
 
-    # ── Slide 5: organograma patrimonial ─────────────────────────────────────
+    # ── Slide 5: organograma patrimonial — INVERTED LAYOUT ───────────────────
+    # Offshore cluster on TOP, person (client) in MIDDLE, Brazilian assets
+    # on BOTTOM. Reasoning: visually highlights the international footprint
+    # by giving offshore the prominent top position.
     s5 = prs.slides[4]; clear(s5)
     add_title_bar(s5)
     ribbon(s5, "A. ORGANOGRAMA DA ESTRUTURA PATRIMONIAL")
     CX5 = SW//2
+    BH = 980_000   # asset-box height (used for both clusters)
 
-    # Client name + person icon
-    T(s5, CLIENT, 1_200_000, CT+10_000, SW-2_400_000, fh(12),
-      pt=12, bold=True, col=NAVY, align='center', font='Gotham SSm Bold')
-    PERSON_SZ = 300_000
-    PERSON_Y = CT+10_000+fh(12)+150_000
-    Person(s5, CX5, PERSON_Y, sz=PERSON_SZ, col=NAVY,
-           gender=guess_gender(CLIENT))
-    PB = PERSON_Y + PERSON_SZ//2          # exact bottom edge of the icon
-
-    # short vertical line down to the flag hub (clear gap below the icon)
-    FLAG_CY = PB + 230_000
-    L(s5, CX5, PB+30_000, CX5, FLAG_CY - 105_000)
-
-    # FIX #4: Brazil flag as the national-assets hub node
-    brazil_flag(s5, CX5, FLAG_CY, w=300_000)
-    # Label below flag — push down enough that the connector line doesn't cross it
-    LABEL_Y = FLAG_CY + 145_000
-    T(s5, "ATIVOS NO BRASIL", CX5-1_500_000, LABEL_Y, 3_000_000, fh(7),
-      pt=7, bold=True, col=GRAY_MED, align='center', font='Gotham SSm Bold')
-
-    # horizontal distributor — snug below the flag label
-    HDIST_Y = LABEL_Y + fh(7) + 45_000
-    L(s5, CX5, FLAG_CY+90_000, CX5, HDIST_Y)
-
-    # BR boxes — taller, generous internal spacing (no overlap)
-    br_items = br[:5] if br else []
-    n_br = max(1, len(br_items))
-    BW = 1_900_000; BH = 980_000; BG = 80_000
-    TBW = n_br*BW + (n_br-1)*BG
-    BS  = (SW-TBW)//2
-    BRT = HDIST_Y + 55_000
-
-    L(s5, BS+BW//2, HDIST_Y, BS+TBW-BW//2, HDIST_Y)
-    for i,(name,val) in enumerate(br_items):
-        bx = BS+i*(BW+BG); by = BRT
-        L(s5, bx+BW//2, HDIST_Y, bx+BW//2, by)
-        sh = R(s5, bx, by, BW, BH); sh.fill.background()
-        sh.line.color.rgb=NAVY; sh.line.width=Pt(0.75)
-        # Asset icon at top-centre
-        icon_for(name)(s5, bx + BW//2, by + 175_000, sz=210_000, col=NAVY)
-        # Asset name (middle)
-        T(s5,name,bx+60_000,by+330_000,BW-120_000,fh(8.5)*2,
-          pt=8.5,bold=True,col=NAVY,align='center',font='Gotham SSm Bold',wrap=True)
-        # Value (lower-middle)
-        T(s5,brl(val),bx+60_000,by+650_000,BW-120_000,fh(13),
-          pt=13,bold=True,col=NAVY,align='center',font='Gotham SSm Bold')
-        # Brazilian flag tucked into bottom-right corner
-        brazil_flag(s5, bx + BW - 130_000, by + BH - 90_000, w=180_000)
-
-    # Offshore cluster
+    # ─── TOP CLUSTER: Offshore (rendered first, at the top of the slide) ───
+    TOP_Y = CT + 30_000  # just below the title ribbon
     if off:
-        OBY = BRT+BH+150_000
-        OBX = CX5-1_350_000
-        R(s5, OBX, OBY, 2_700_000, 360_000, fill=NAVY)
-        T(s5,"OFFSHORE",OBX,OBY,2_700_000,360_000,
-          pt=13,bold=True,col=WHITE,align='center',font='Gotham SSm Bold')
-        L(s5, CX5, BRT+BH, CX5, OBY)
-        OFL = OBY+360_000
-        OHDIST = OFL+95_000
-        L(s5, CX5, OFL, CX5, OHDIST)
+        # OFFSHORE label box (navy block with white text)
+        OBW = 2_700_000
+        OBH = 360_000
+        OBX = CX5 - OBW//2
+        OBY = TOP_Y
+        R(s5, OBX, OBY, OBW, OBH, fill=NAVY)
+        T(s5, "OFFSHORE", OBX, OBY, OBW, OBH,
+          pt=13, bold=True, col=WHITE, align='center', font='Gotham SSm Bold')
+
+        # Vertical drop + horizontal distributor below the OFFSHORE box
+        OHDIST = OBY + OBH + 110_000
+        L(s5, CX5, OBY+OBH, CX5, OHDIST)
+
+        # Offshore asset boxes laid out in a row directly under the label
         n_off = len(off)
         OW = min(3_500_000, (SW-1_000_000)//n_off - 130_000)
         OG = 150_000
         TOW = n_off*OW + (n_off-1)*OG
-        OS  = (SW-TOW)//2
+        OS  = (SW - TOW)//2
         ORT = OHDIST + 55_000
         L(s5, OS+OW//2, OHDIST, OS+TOW-OW//2, OHDIST)
-        for i,(name,val) in enumerate(off):
-            ox = OS+i*(OW+OG); oy = ORT
+        for i, (name, val) in enumerate(off):
+            ox = OS + i*(OW+OG); oy = ORT
             L(s5, ox+OW//2, OHDIST, ox+OW//2, oy)
             sh = R(s5, ox, oy, OW, BH); sh.fill.background()
-            sh.line.color.rgb=NAVY; sh.line.width=Pt(0.75)
-            # Asset icon at top-centre
+            sh.line.color.rgb = NAVY; sh.line.width = Pt(0.75)
             icon_for(name)(s5, ox + OW//2, oy + 175_000, sz=210_000, col=NAVY)
-            # Asset name
-            T(s5,name,ox+60_000,oy+330_000,OW-120_000,fh(8.5)*2,
-              pt=8.5,bold=True,col=NAVY,align='center',font='Gotham SSm Bold',wrap=True)
-            vstr = usd(val) if val>0 else 'N/D'
-            T(s5,vstr,ox+60_000,oy+650_000,OW-120_000,fh(13),
-              pt=13,bold=True,col=NAVY,align='center',font='Gotham SSm Bold')
-            # Globe icon in bottom-right corner (offshore indicator)
+            T(s5, name, ox+60_000, oy+330_000, OW-120_000, fh(8.5)*2,
+              pt=8.5, bold=True, col=NAVY, align='center', font='Gotham SSm Bold', wrap=True)
+            vstr = usd(val) if val > 0 else 'N/D'
+            T(s5, vstr, ox+60_000, oy+650_000, OW-120_000, fh(13),
+              pt=13, bold=True, col=NAVY, align='center', font='Gotham SSm Bold')
             icon_globe(s5, ox + OW - 130_000, oy + BH - 90_000, sz=170_000, col=NAVY)
+        OFF_BOTTOM = ORT + BH
+    else:
+        OFF_BOTTOM = TOP_Y  # no offshore — person starts higher
+
+    # ─── MIDDLE: client name + person icon ───
+    NAME_Y = OFF_BOTTOM + 220_000  # gap between cluster and middle
+    T(s5, CLIENT, 1_200_000, NAME_Y, SW-2_400_000, fh(12),
+      pt=12, bold=True, col=NAVY, align='center', font='Gotham SSm Bold')
+    PERSON_SZ = 300_000
+    PERSON_Y = NAME_Y + fh(12) + 100_000
+    Person(s5, CX5, PERSON_Y, sz=PERSON_SZ, col=NAVY,
+           gender=guess_gender(CLIENT))
+    PB = PERSON_Y + PERSON_SZ//2  # bottom edge of the person icon
+
+    # Connector: from offshore cluster down into the person's name area
+    if off:
+        L(s5, CX5, OFF_BOTTOM, CX5, NAME_Y - 30_000)
+
+    # ─── BOTTOM CLUSTER: Brazilian assets ───
+    # Drop from person → BR flag hub
+    FLAG_CY = PB + 230_000
+    L(s5, CX5, PB+30_000, CX5, FLAG_CY - 105_000)
+    brazil_flag(s5, CX5, FLAG_CY, w=300_000)
+
+    LABEL_Y = FLAG_CY + 145_000
+    T(s5, "ATIVOS NO BRASIL", CX5-1_500_000, LABEL_Y, 3_000_000, fh(7),
+      pt=7, bold=True, col=GRAY_MED, align='center', font='Gotham SSm Bold')
+
+    # Horizontal distributor + BR asset boxes
+    HDIST_Y = LABEL_Y + fh(7) + 45_000
+    L(s5, CX5, FLAG_CY+90_000, CX5, HDIST_Y)
+
+    br_items = br[:5] if br else []
+    n_br = max(1, len(br_items))
+    BW = 1_900_000; BG = 80_000
+    TBW = n_br*BW + (n_br-1)*BG
+    BS  = (SW - TBW)//2
+    BRT = HDIST_Y + 55_000
+
+    L(s5, BS+BW//2, HDIST_Y, BS+TBW-BW//2, HDIST_Y)
+    for i, (name, val) in enumerate(br_items):
+        bx = BS + i*(BW+BG); by = BRT
+        L(s5, bx+BW//2, HDIST_Y, bx+BW//2, by)
+        sh = R(s5, bx, by, BW, BH); sh.fill.background()
+        sh.line.color.rgb = NAVY; sh.line.width = Pt(0.75)
+        icon_for(name)(s5, bx + BW//2, by + 175_000, sz=210_000, col=NAVY)
+        T(s5, name, bx+60_000, by+330_000, BW-120_000, fh(8.5)*2,
+          pt=8.5, bold=True, col=NAVY, align='center', font='Gotham SSm Bold', wrap=True)
+        T(s5, brl(val), bx+60_000, by+650_000, BW-120_000, fh(13),
+          pt=13, bold=True, col=NAVY, align='center', font='Gotham SSm Bold')
+        brazil_flag(s5, bx + BW - 130_000, by + BH - 90_000, w=180_000)
 
     # ── Slide 6: organograma familiar ────────────────────────────────────────
     s6 = prs.slides[5]; clear(s6)
