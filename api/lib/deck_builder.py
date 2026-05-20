@@ -19878,36 +19878,69 @@ def aggregate(data):
     """Returns dict with everything the deck needs."""
     groups = data.get('groups', [])
 
-    # For the PPT, we collapse Previdência + Cripto + Equity into a single
-    # "Outros (Previdência, Cripto, Equity)" bucket so we don't blow past the
-    # 6-slot grid. These show up separately in the Excel and verify screen.
-    OUTROS_GROUPS = {
-        'Previdência Privada',
-        'Criptoativos',
-        'Remuneração Variável em Equity',
+    # For the PPT slide 2 we have at most 6 callout slots around the pie.
+    # Strategy: if the client has ≤ 6 categories, each gets its own slice
+    # (so Cripto / Previdência / Equity show up as their own slices when
+    # the client has them). If there are MORE than 6 categories, keep the
+    # 5 largest as their own slices and bundle the remaining (smaller)
+    # ones into a single "Outros" slice. The Outros label is decorated
+    # with the bundled categories when 2-3 of them so the reader knows
+    # what's inside (e.g. "Outros (Cripto + Equity)").
+
+    # Short forms used in the Outros bucket label (keeps it readable
+    # against the narrow callout width).
+    _SHORT = {
+        'Criptoativos': 'Cripto',
+        'Previdência Privada': 'Previdência',
+        'Remuneração Variável em Equity': 'Equity',
+        'Bens Imóveis': 'Imóveis',
+        'Bens Móveis': 'Móveis',
+        'Bens Móveis / Veículos / Arte': 'Móveis',
+        'Participações Societárias': 'Part. Soc.',
+        'Aplicações e Investimentos': 'Aplicações',
+        'Créditos e Direitos': 'Créditos',
+        'Contas Bancárias e Saldos': 'Contas',
+        'Contas Bancárias': 'Contas',
     }
-    OUTROS_LABEL = 'Outros (Previdência, Cripto, Equity)'
 
-    def _bucket_name(name):
-        return OUTROS_LABEL if name in OUTROS_GROUPS else name
+    def _top6_with_outros(agg_dict):
+        """agg_dict: {category_name: total_value}. Returns:
+          - items: list of (name, value) tuples (≤ 6 entries)
+          - components: dict mapping "Outros (...)" label → list of the
+            original category names bundled inside it (empty dict if no
+            bundling happened).
+        Used to drive both the pie chart and the strategy-hyperlink lookup
+        for the Outros callout."""
+        items = sorted(agg_dict.items(), key=lambda kv: -kv[1])
+        if len(items) <= 6:
+            return items, {}
+        top5 = items[:5]
+        rest = items[5:]
+        rest_total = sum(v for _, v in rest)
+        if 0 < len(rest) <= 3:
+            names = [_SHORT.get(n, n) for n, _ in rest]
+            outros_label = f"Outros ({' + '.join(names)})"
+        else:
+            outros_label = 'Outros'
+        components = {outros_label: [n for n, _ in rest]}
+        return top5 + [(outros_label, rest_total)], components
 
-    # Brasil: sum dirpf per group-name (after bucketing)
+    # Brasil: sum dirpf per group-name (no forced bucketing — each category
+    # keeps its own name; bundling into "Outros" only happens if > 6 total).
     br_agg = {}
     for g in groups:
         if g.get('jurisdiction') == 'Brasil':
             tot = sum((it.get('dirpf') or 0) for it in g['items'])
-            key = _bucket_name(g['name'])
-            br_agg[key] = br_agg.get(key, 0) + tot
-    br_sorted = sorted(br_agg.items(), key=lambda kv: -kv[1])
+            br_agg[g['name']] = br_agg.get(g['name'], 0) + tot
+    br_sorted, br_outros_components = _top6_with_outros(br_agg)
 
-    # Offshore: sum dcbe per group-name (after bucketing)
+    # Offshore: same logic, summing dcbe.
     off_agg = {}
     for g in groups:
         if g.get('jurisdiction') == 'Offshore':
             tot = sum((it.get('dcbe') or 0) for it in g['items'])
-            key = _bucket_name(g['name'])
-            off_agg[key] = off_agg.get(key, 0) + tot
-    off_sorted = sorted(off_agg.items(), key=lambda kv: -kv[1])
+            off_agg[g['name']] = off_agg.get(g['name'], 0) + tot
+    off_sorted, off_outros_components = _top6_with_outros(off_agg)
 
     total_br  = sum(v for _, v in br_sorted)
     total_off = sum(v for _, v in off_sorted)
@@ -19921,6 +19954,12 @@ def aggregate(data):
         'off_sorted':off_sorted,
         'total_br':  total_br,
         'total_off': total_off,
+        # When a slide-2 callout aggregates multiple categories into an
+        # "Outros" bucket, the hyperlinks shown under that callout should
+        # pool the strategies of the bundled categories. This dict maps
+        # "Outros (...)" label → list of underlying category names.
+        'br_outros_components':  br_outros_components,
+        'off_outros_components': off_outros_components,
     }
 
 def brl(v, d=1): return f"R$ {v/1e6:.{d}f}M"
@@ -21122,10 +21161,17 @@ def short_strategy(s, max_len=42):
 
 
 def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
-                            indice_p, indice_s, strategy_slides):
+                            indice_p, indice_s, strategy_slides,
+                            outros_components=None):
     """Draw the redesigned slide 2: donut centered + 6 callouts around with
     category name, value, percentage, and 0–2 strategy hyperlinks each.
-    Two big bottom buttons link to the Patrimonial / Sucessório indices."""
+    Two big bottom buttons link to the Patrimonial / Sucessório indices.
+
+    `outros_components` is an optional dict mapping an "Outros (...)" label
+    to the list of categories bundled inside it; used to aggregate
+    strategies for the Outros callout so its hyperlinks reflect the real
+    bundled categories instead of being empty."""
+    outros_components = outros_components or {}
     from pptx.util import Inches, Emu, Pt
     from pptx.enum.shapes import MSO_SHAPE
     from pptx.enum.text import PP_ALIGN
@@ -21352,7 +21398,22 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
         # NOT to the text run. If it were on the run, PowerPoint would
         # substitute the run's text colour with the theme's hyperlink
         # colour, wiping out the gold/blue distinction we set below.
-        strategies = CATEGORY_STRATEGIES.get(name, [])[:2]
+        # Resolve the strategies to show under this callout. For a regular
+        # category that's just a CATEGORY_STRATEGIES lookup. For the
+        # synthetic "Outros (...)" bucket, no direct entry exists — so we
+        # pool the strategies of the underlying bundled categories
+        # (deduped, keeping first occurrence; capped at 2 to fit the slot).
+        if name in outros_components:
+            pooled = []
+            seen = set()
+            for comp_name in outros_components[name]:
+                for s_tuple in CATEGORY_STRATEGIES.get(comp_name, []):
+                    if s_tuple[0] not in seen:
+                        seen.add(s_tuple[0])
+                        pooled.append(s_tuple)
+            strategies = pooled[:2]
+        else:
+            strategies = CATEGORY_STRATEGIES.get(name, [])[:2]
         for j, (sname, theme) in enumerate(strategies):
             s_y = cy + Inches(0.56) + j * Inches(0.20)
             stx_shape = sl.shapes.add_textbox(cx, s_y, CALLOUT_W, Inches(0.20))
@@ -21480,6 +21541,7 @@ def build_deck(data, output_path):
     off      = agg['off_sorted']
     TOTAL_BR = agg['total_br']
     TOTAL_OFF= agg['total_off']
+    BR_OUTROS_COMPONENTS = agg.get('br_outros_components', {})
 
     # ── Stage 1: copy + strip orphans ────────────────────────────────────────
     shutil.copy(REF_TEMPLATE, output_path)
@@ -22122,6 +22184,7 @@ def build_deck(data, output_path):
         s2_new, prs.slide_width, prs.slide_height,
         br, TOTAL_BR,
         indice_p, indice_s, strategy_slides,
+        BR_OUTROS_COMPONENTS,
     )
 
     # Re-number TextBox 13 (slide number) on every remaining slide
