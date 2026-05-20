@@ -788,6 +788,21 @@ function App(){
     });
   };
 
+  // Dropdown menu for "+ Adicionar categoria". Tracks open state and the
+  // click-outside-to-close handler so a click anywhere off the menu closes it.
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const addMenuRef = useRef();
+  useEffect(() => {
+    if (!addMenuOpen) return;
+    const onClickOutside = (e) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target)) {
+        setAddMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, [addMenuOpen]);
+
   // ── Drag & drop: move items between groups within the same jurisdiction ──
   const [dragSource, setDragSource] = useState(null);  // {grpName, juris, idx}
   const moveItem = (src, destGrpName, destJuris) => {
@@ -814,21 +829,19 @@ function App(){
     setDragSource(null);
   };
 
-  const addOutrosGroup = (juris) => {
-    const name = juris === "Brasil" ? "Outros Ativos" : "Outros Ativos no Exterior";
+  // Add a NAMED group (Cripto, Previdência, Equity, Outros, etc).
+  // If the group already exists in that jurisdiction, just activate it
+  // (no duplicate group, no extra blank item). Used by the "+ Adicionar
+  // categoria" dropdown below the chip row.
+  const addNamedGroup = (groupName, juris) => {
     setData(prev => {
-      const exists = prev.groups.some(g => g.name === name && g.jurisdiction === juris);
-      if (exists) {
-        // Group already exists — just add a new blank item to it
-        addItemToGroup(name, juris);
-        setActiveCat(name);
-        return prev;
-      }
-      const newGrp = {name, jurisdiction: juris, items:[{id:1, desc:"", loc:"", subcategory:"", dirpf:null, dcbe:null, comments:""}]};
+      const exists = prev.groups.some(g => g.name === groupName && g.jurisdiction === juris);
+      if (exists) return prev;  // already there — just activate below
+      const newGrp = {name: groupName, jurisdiction: juris, items:[{id:1, desc:"", loc:"", subcategory:"", dirpf:null, dcbe:null, comments:""}]};
       return {...prev, groups:[...prev.groups, newGrp]};
     });
     setActiveJuris(juris);
-    setTimeout(()=>setActiveCat(juris==="Brasil"?"Outros Ativos":"Outros Ativos no Exterior"),50);
+    setTimeout(()=>setActiveCat(groupName), 50);
   };
 
   const updateDebt = (idx, field, value) => {
@@ -1165,7 +1178,7 @@ function App(){
           })}
         </div>
 
-        {/* Category sub-tabs + add Outros button */}
+        {/* Category sub-tabs + add category dropdown */}
         {activeGrps.length > 0 && (
           <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:14,alignItems:"center"}}>
             {["Todos", ...activeGrps.map(g=>g.name)].map(catName => {
@@ -1191,23 +1204,71 @@ function App(){
                 </button>
               );
             })}
-            {/* + Outros button */}
-            <button
-              onClick={()=>addOutrosGroup(activeJuris)}
-              style={{
-                background:"transparent",
-                color:C.muted,
-                border:`1px dashed ${C.border}`,
-                borderRadius:999,
-                padding:"7px 14px",
-                cursor:"pointer",
-                fontFamily:"'Nunito Sans',sans-serif",
-                fontSize:12,
-                fontWeight:500,
-                display:"flex",alignItems:"center",gap:5,
-              }}>
-              <span style={{fontSize:14,lineHeight:1}}>+</span> Outros
-            </button>
+            {/* + Adicionar categoria dropdown — Cripto, Previdência, Equity, Outros, etc.
+                Lists every TAXONOMY group that doesn't already exist in this jurisdiction,
+                plus an "Outros Ativos" catch-all. Replaces the old single "+ Outros" button
+                so Previdência/Cripto/Equity become FIRST-CLASS categories (not buried in
+                a generic Outros bucket). */}
+            {(() => {
+              const existing = new Set(activeGrps.map(g => g.name));
+              const otherName = activeJuris === "Brasil" ? "Outros Ativos" : "Outros Ativos no Exterior";
+              const ADDABLE = [
+                "Criptoativos",
+                "Previdência Privada",
+                "Remuneração Variável em Equity",
+                "Bens Imóveis",
+                "Bens Móveis",
+                "Participações Societárias",
+                "Aplicações e Investimentos",
+                "Créditos e Direitos",
+                "Contas Bancárias e Saldos",
+              ].filter(n => !existing.has(n));
+              const options = [...ADDABLE, otherName].filter(n => !existing.has(n) || n === otherName);
+              return (
+                <div ref={addMenuRef} style={{position:"relative"}}>
+                  <button
+                    onClick={()=>setAddMenuOpen(o=>!o)}
+                    style={{
+                      background:"transparent",
+                      color:C.muted,
+                      border:`1px dashed ${C.border}`,
+                      borderRadius:999,
+                      padding:"7px 14px",
+                      cursor:"pointer",
+                      fontFamily:"'Nunito Sans',sans-serif",
+                      fontSize:12,
+                      fontWeight:500,
+                      display:"flex",alignItems:"center",gap:5,
+                    }}>
+                    <span style={{fontSize:14,lineHeight:1}}>+</span> Adicionar categoria
+                  </button>
+                  {addMenuOpen && (
+                    <div style={{
+                      position:"absolute", top:"calc(100% + 4px)", left:0,
+                      background:C.card, border:`1px solid ${C.border}`,
+                      borderRadius:8, padding:4, minWidth:260, zIndex:50,
+                      boxShadow:"0 8px 24px rgba(0,0,0,.10)",
+                    }}>
+                      {options.map(name => (
+                        <button key={name}
+                          onClick={()=>{ addNamedGroup(name, activeJuris); setAddMenuOpen(false); }}
+                          style={{
+                            display:"block", width:"100%", textAlign:"left",
+                            background:"transparent", border:"none",
+                            padding:"8px 12px", borderRadius:4,
+                            color:C.text, fontSize:12, cursor:"pointer",
+                            fontFamily:"'Nunito Sans',sans-serif",
+                          }}
+                          onMouseEnter={e=>e.currentTarget.style.background=C.surface}
+                          onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                          {name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
 
