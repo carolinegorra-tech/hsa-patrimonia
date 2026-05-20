@@ -15,7 +15,7 @@ maps into the 6 template slots.
 """
 import shutil, os, re, tempfile, zipfile
 from pptx import Presentation
-from pptx.util import Emu, Pt
+from pptx.util import Emu, Pt, Inches
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE, MSO_CONNECTOR_TYPE
@@ -19856,7 +19856,7 @@ REF_TEMPLATE = _ensure_template()
 
 # ── Palette ───────────────────────────────────────────────────────────────────
 NAVY     = RGBColor(0x28,0x39,0x44)
-LIME     = RGBColor(0xD4,0xE1,0x42)
+LIME     = RGBColor(0xE4,0xE5,0x1F)
 GRAY_MED = RGBColor(0x8E,0x95,0x9B)
 GRAY_LT  = RGBColor(0xBE,0xC2,0xC6)
 WHITE    = RGBColor(0xFF,0xFF,0xFF)
@@ -19878,20 +19878,35 @@ def aggregate(data):
     """Returns dict with everything the deck needs."""
     groups = data.get('groups', [])
 
-    # Brasil: sum dirpf per group-name
+    # For the PPT, we collapse Previdência + Cripto + Equity into a single
+    # "Outros (Previdência, Cripto, Equity)" bucket so we don't blow past the
+    # 6-slot grid. These show up separately in the Excel and verify screen.
+    OUTROS_GROUPS = {
+        'Previdência Privada',
+        'Criptoativos',
+        'Remuneração Variável em Equity',
+    }
+    OUTROS_LABEL = 'Outros (Previdência, Cripto, Equity)'
+
+    def _bucket_name(name):
+        return OUTROS_LABEL if name in OUTROS_GROUPS else name
+
+    # Brasil: sum dirpf per group-name (after bucketing)
     br_agg = {}
     for g in groups:
         if g.get('jurisdiction') == 'Brasil':
             tot = sum((it.get('dirpf') or 0) for it in g['items'])
-            br_agg[g['name']] = br_agg.get(g['name'], 0) + tot
+            key = _bucket_name(g['name'])
+            br_agg[key] = br_agg.get(key, 0) + tot
     br_sorted = sorted(br_agg.items(), key=lambda kv: -kv[1])
 
-    # Offshore: sum dcbe per group-name
+    # Offshore: sum dcbe per group-name (after bucketing)
     off_agg = {}
     for g in groups:
         if g.get('jurisdiction') == 'Offshore':
             tot = sum((it.get('dcbe') or 0) for it in g['items'])
-            off_agg[g['name']] = off_agg.get(g['name'], 0) + tot
+            key = _bucket_name(g['name'])
+            off_agg[key] = off_agg.get(key, 0) + tot
     off_sorted = sorted(off_agg.items(), key=lambda kv: -kv[1])
 
     total_br  = sum(v for _, v in br_sorted)
@@ -20509,8 +20524,10 @@ def icon_frame(sl, cx, cy, sz=200_000, col=None):
 def icon_shield(sl, cx, cy, sz=200_000, col=None):
     col = col or NAVY
     w = int(sz*0.78); h = sz
-    # HOMEPLATE shape points downward — perfect for shield
-    _ish(sl, _MS.HOME_PLATE, cx-w//2, cy-h//2, w, h, fill=col)
+    # PENTAGON shape (5-sided, points up) — used as shield. HOME_PLATE was
+    # the prior choice but it's missing in some python-pptx builds. Pentagon
+    # is universally available and reads as a shield/badge.
+    _ish(sl, _MS.PENTAGON, cx-w//2, cy-h//2, w, h, fill=col)
     # tiny white check
     T(sl,'✓',cx-w//2, cy-h//2+15_000, w, h,
       pt=int(sz/13_000), bold=True, col=WHITE, align='center', font='Gotham SSm Bold')
@@ -20616,6 +20633,768 @@ def fh(pt): return int(pt*12700*1.85)
 # ════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ════════════════════════════════════════════════════════════════════════════
+# ── Strategy taxonomy ────────────────────────────────────────────────────
+# HSA's catalogue of patrimonial and successoral planning strategies.
+# Each becomes a hyperlink in the indice slides + a blank sketch slide.
+# Two top-level themes:
+#   Patrimonial → blue accent (#2D5C7F)
+#   Sucessório  → yellow accent (#E4E51F)
+STRATEGY_BLUE   = RGBColor(0x2D, 0x5C, 0x7F)
+STRATEGY_YELLOW = RGBColor(0xE4, 0xE5, 0x1F)
+
+PATRIMONIAL_STRATEGIES = [
+    ('Estruturas de Organização Patrimonial', [
+        'Trust',
+        'Constituição de Offshore',
+        'Constituição de Holding (operacional e/ou patrimonial)',
+        'Holding Imobiliária',
+        'Fundo Exclusivo / Fundo Fechado',
+        'Holding Patrimonial (limitadas, anônimas fechadas, em conta de participação)',
+        'Mútuo (empréstimo entre partes relacionadas)',
+    ]),
+    ('Planejamento Tributário e Residência', [
+        'Mudança de Residência Fiscal (saída do Brasil)',
+        'Planejamento Pré-Imigratório',
+    ]),
+    ('Governança', [
+        'Governança Corporativa (Acordo de Sócios, Estatuto, Regimentos Internos)',
+        'Governança Familiar (Protocolo Familiar, Conselho de Família)',
+        'Política de Dividendos',
+    ]),
+]
+
+SUCESSORIO_STRATEGIES = [
+    ('Instrumentos de Transmissão em Vida', [
+        'Doações (simples, com encargos, com reserva de usufruto, com cláusulas restritivas)',
+        'Antecipação de Herança',
+    ]),
+    ('Instrumentos de Transmissão Causa Mortis', [
+        'Testamentos (Brasil e Exterior — mirror wills)',
+        'Testamentos com cláusulas restritivas',
+        'Legados específicos',
+    ]),
+    ('Proteção e Incapacidade', [
+        'Curatela (judicial e extrajudicial)',
+        'Diretivas Antecipadas de Vontade (mandato duradouro / living will)',
+        'Tomada de Decisão Apoiada',
+    ]),
+    ('Regime de Bens', [
+        'Comunhão Parcial de Bens',
+        'Comunhão Universal de Bens',
+        'Separação Total de Bens (convencional)',
+        'Pacto Antenupcial / Alteração de Regime de Bens',
+    ]),
+    ('Outros Instrumentos Sucessórios', [
+        'Partilha em Vida',
+        'Inventário Extrajudicial (planejamento preventivo)',
+        'Seguro de Vida (como ferramenta de liquidez sucessória)',
+        'Beneficiários em previdência privada (VGBL/PGBL)',
+        'Acordo de Acionistas com cláusulas sucessórias (tag along, drag along, opção de compra)',
+    ]),
+]
+
+
+def _slide_anchor_id(strategy_name: str) -> str:
+    """Stable short ID for use as a slide nickname (for hyperlink resolution)."""
+    import re, unicodedata
+    s = unicodedata.normalize('NFD', strategy_name).encode('ascii', 'ignore').decode('ascii')
+    s = re.sub(r'[^a-zA-Z0-9]+', '_', s).strip('_').lower()
+    return s[:60]
+
+
+def _append_blank_slide_layout(prs):
+    """Add a 16:9 blank slide and return it. Uses the master layout 6 (blank)
+    when available; falls back to layout 0."""
+    try:
+        layout = prs.slide_layouts[6]
+    except (IndexError, KeyError):
+        layout = prs.slide_layouts[0]
+    return prs.slides.add_slide(layout)
+
+
+def _draw_strategy_chrome(slide, prs_width, prs_height):
+    """Draws the standard HSA chrome: PATRIMON.IA header, yellow band,
+    confidencial footer band. Mimics the look of the existing template slides
+    so the new slides feel native."""
+    # Top header — PATRIMON.IA + thin yellow line
+    tb = slide.shapes.add_textbox(Inches(0.45), Inches(0.30), Inches(3), Inches(0.45)).text_frame
+    tb.margin_left = tb.margin_top = tb.margin_bottom = 0
+    p = tb.paragraphs[0]; p.alignment = PP_ALIGN.LEFT
+    r = p.add_run(); r.text = "PATRIMON.IA"
+    r.font.name = "Gotham SSm Bold"; r.font.size = Pt(13); r.font.bold = True; r.font.color.rgb = NAVY
+    # Yellow line below header
+    line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.45), Inches(0.80), prs_width - Inches(2.5), Inches(0.03))
+    line.fill.solid(); line.fill.fore_color.rgb = LIME
+    line.line.fill.background()
+    # HSA logo box in top right (simple frame, label)
+    hsa = slide.shapes.add_textbox(prs_width - Inches(1.4), Inches(0.30), Inches(1.0), Inches(0.55)).text_frame
+    hsa.margin_left = hsa.margin_top = hsa.margin_bottom = 0
+    p = hsa.paragraphs[0]; p.alignment = PP_ALIGN.RIGHT
+    r = p.add_run(); r.text = "H S\n+ A"
+    r.font.name = "Gotham SSm Bold"; r.font.size = Pt(11); r.font.bold = True; r.font.color.rgb = NAVY
+    # Bottom dark band with CONFIDENCIAL + waves placeholder
+    band = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, prs_height - Inches(0.55), prs_width, Inches(0.55))
+    band.fill.solid(); band.fill.fore_color.rgb = NAVY
+    band.line.fill.background()
+    foot = slide.shapes.add_textbox(Inches(0.4), prs_height - Inches(0.45), Inches(3), Inches(0.35)).text_frame
+    foot.margin_left = foot.margin_top = foot.margin_bottom = 0
+    p = foot.paragraphs[0]; p.alignment = PP_ALIGN.LEFT
+    r = p.add_run(); r.text = "C O N F I D E N C I A L"
+    r.font.name = "Gotham SSm Black"; r.font.size = Pt(9); r.font.bold = False
+    r.font.color.rgb = RGBColor(0xC0, 0xC0, 0xC0); r.font.color.rgb = GRAY_LT
+    # Slide number placeholder (TextBox 13 conventional name — renumbered later)
+    num = slide.shapes.add_textbox(prs_width - Inches(0.7), prs_height - Inches(0.45), Inches(0.4), Inches(0.35))
+    num.name = 'TextBox 13'
+    tf = num.text_frame; tf.margin_left = tf.margin_top = tf.margin_bottom = 0
+    p = tf.paragraphs[0]; p.alignment = PP_ALIGN.RIGHT
+    r = p.add_run(); r.text = "0"
+    r.font.name = "Gotham SSm Black"; r.font.size = Pt(11.7); r.font.bold = False; r.font.color.rgb = GRAY_MED
+
+
+def _add_strategy_sketch_slide(prs, strategy_name: str, accent_color, theme_label: str):
+    """Create a blank-sketch slide for one strategy. Layout:
+      - chrome (PATRIMON.IA, footer)
+      - small theme tag ('PLANEJAMENTO PATRIMONIAL' or 'PLANEJAMENTO SUCESSÓRIO')
+      - large title in accent color
+      - 4 section blocks (Quando recomendar / Estrutura / Custos / Considerações)
+      - back button text 'Voltar ao Índice' (real navigation hyperlinks are added
+        in a second pass after all slides exist)
+    """
+    sl = _append_blank_slide_layout(prs)
+    prs_w = prs.slide_width; prs_h = prs.slide_height
+    _draw_strategy_chrome(sl, prs_w, prs_h)
+
+    # Theme tag (small, above title)
+    tag = sl.shapes.add_textbox(Inches(0.45), Inches(1.10), Inches(7), Inches(0.30)).text_frame
+    tag.margin_left = tag.margin_top = tag.margin_bottom = 0
+    p = tag.paragraphs[0]
+    r = p.add_run(); r.text = theme_label.upper()
+    r.font.name = "Gotham SSm Bold"; r.font.size = Pt(9); r.font.bold = True
+    r.font.color.rgb = accent_color
+
+    # Strategy title (large, accent color, may wrap)
+    ttl = sl.shapes.add_textbox(Inches(0.45), Inches(1.45), prs_w - Inches(1.5), Inches(1.0)).text_frame
+    ttl.margin_left = ttl.margin_top = ttl.margin_bottom = 0
+    ttl.word_wrap = True
+    p = ttl.paragraphs[0]
+    r = p.add_run(); r.text = strategy_name
+    r.font.name = "Gotham SSm Bold"; r.font.size = Pt(22); r.font.bold = True
+    r.font.color.rgb = NAVY
+
+    # 4 section boxes — 2x2 grid
+    SECTIONS = [
+        ("Quando recomendar",          "• Perfil do cliente em que se aplica\n• Necessidade que resolve\n• Sinais de gatilho"),
+        ("Estrutura e funcionamento",  "• Como se constitui\n• Partes envolvidas\n• Documentos necessários"),
+        ("Custos, prazos e tributação","• Custo de implementação\n• Custo de manutenção\n• Impacto tributário\n• Prazo de execução"),
+        ("Considerações e riscos",     "• Pontos de atenção\n• Limitações e restrições\n• Quando NÃO recomendar"),
+    ]
+    BOX_TOP   = Inches(2.85)
+    BOX_W     = (prs_w - Inches(1.20)) // 2
+    BOX_H     = Inches(1.65)
+    GAP_X     = Inches(0.30)
+    GAP_Y     = Inches(0.25)
+    for i, (title, body) in enumerate(SECTIONS):
+        col = i % 2; row = i // 2
+        x = Inches(0.45) + col * (BOX_W + GAP_X)
+        y = BOX_TOP + row * (BOX_H + GAP_Y)
+        # Box outline
+        rect = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, x, y, BOX_W, BOX_H)
+        rect.fill.solid(); rect.fill.fore_color.rgb = WHITE
+        rect.line.color.rgb = GRAY_LT; rect.line.width = Pt(0.5)
+        # Title bar (thin colored top edge)
+        bar = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, x, y, BOX_W, Inches(0.04))
+        bar.fill.solid(); bar.fill.fore_color.rgb = accent_color
+        bar.line.fill.background()
+        # Section title
+        t = sl.shapes.add_textbox(x + Inches(0.18), y + Inches(0.12), BOX_W - Inches(0.36), Inches(0.32)).text_frame
+        t.margin_left = t.margin_top = t.margin_bottom = 0
+        p = t.paragraphs[0]
+        r = p.add_run(); r.text = title.upper()
+        r.font.name = "Gotham SSm Bold"; r.font.size = Pt(9); r.font.bold = True
+        r.font.color.rgb = NAVY
+        # Section body (placeholder bullets)
+        b = sl.shapes.add_textbox(x + Inches(0.18), y + Inches(0.50), BOX_W - Inches(0.36), BOX_H - Inches(0.55)).text_frame
+        b.margin_left = b.margin_top = b.margin_bottom = 0
+        b.word_wrap = True
+        first = True
+        for line in body.split("\n"):
+            p = b.paragraphs[0] if first else b.add_paragraph()
+            first = False
+            r = p.add_run(); r.text = line
+            r.font.name = "Gotham SSm Bold"; r.font.size = Pt(9); r.font.bold = False
+            r.font.color.rgb = GRAY_MED
+
+    # Footer "← Voltar ao Índice" hint (real hyperlink added in second pass)
+    # Place ABOVE the dark footer band, below the 4 sketch boxes
+    BACK_Y = BOX_TOP + 2 * (BOX_H + GAP_Y) + Inches(0.05)
+    back = sl.shapes.add_textbox(Inches(0.45), BACK_Y, prs_w - Inches(0.90), Inches(0.30)).text_frame
+    back.margin_left = back.margin_top = back.margin_bottom = 0
+    p = back.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
+    r = p.add_run(); r.text = "← Voltar ao Índice"
+    r.font.name = "Gotham SSm Bold"; r.font.size = Pt(9); r.font.bold = True
+    r.font.color.rgb = accent_color
+    # Tag the run so we can find it later for hyperlink wiring
+    sl._strategy_back_run = r
+    sl._strategy_theme = theme_label
+    sl._strategy_name = strategy_name
+    return sl
+
+
+def _add_indice_slide(prs, theme_label: str, accent_color, strategies):
+    """Creates an Índice slide listing all strategies of a theme, grouped by
+    subtema. Each strategy line becomes a hyperlink target placeholder
+    (wired in second pass)."""
+    sl = _append_blank_slide_layout(prs)
+    prs_w = prs.slide_width; prs_h = prs.slide_height
+    _draw_strategy_chrome(sl, prs_w, prs_h)
+
+    # Theme tag
+    tag = sl.shapes.add_textbox(Inches(0.45), Inches(1.10), prs_w - Inches(0.90), Inches(0.30)).text_frame
+    tag.margin_left = tag.margin_top = tag.margin_bottom = 0
+    p = tag.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
+    r = p.add_run(); r.text = "ÍNDICE"
+    r.font.name = "Gotham SSm Bold"; r.font.size = Pt(9); r.font.bold = True
+    r.font.color.rgb = GRAY_MED
+
+    ttl = sl.shapes.add_textbox(Inches(0.45), Inches(1.40), prs_w - Inches(0.90), Inches(0.70)).text_frame
+    ttl.margin_left = ttl.margin_top = ttl.margin_bottom = 0
+    p = ttl.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
+    r = p.add_run(); r.text = theme_label
+    r.font.name = "Gotham SSm Bold"; r.font.size = Pt(22); r.font.bold = True
+    r.font.color.rgb = accent_color
+
+    # Two columns of subtemas + strategies. Total strategies vary (12-19), so
+    # we balance into 2 columns by item count.
+    flat = []
+    for sub_name, items in strategies:
+        flat.append(('sub', sub_name))
+        for it in items:
+            flat.append(('item', it))
+    # Split roughly in half (prefer break on subtema)
+    half = len(flat) // 2
+    # nudge to break on a subtema boundary
+    while half < len(flat) and flat[half][0] == 'item':
+        half += 1
+    col1, col2 = flat[:half], flat[half:]
+
+    COL_TOP = Inches(2.50)
+    COL_W   = (prs_w - Inches(1.35)) // 2
+    COL_X1  = Inches(0.45)
+    COL_X2  = Inches(0.45) + COL_W + Inches(0.30)
+    LINE_H  = Inches(0.30)
+
+    sl._indice_runs = []   # list of (run, strategy_name) for second-pass linking
+
+    def render_col(items, x):
+        cursor_y = COL_TOP
+        for kind, text in items:
+            if kind == 'sub':
+                tb = sl.shapes.add_textbox(x, cursor_y, COL_W, LINE_H).text_frame
+                tb.margin_left = tb.margin_top = tb.margin_bottom = 0
+                p = tb.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
+                r = p.add_run(); r.text = text.upper()
+                r.font.name = "Gotham SSm Bold"; r.font.size = Pt(9); r.font.bold = True
+                r.font.color.rgb = NAVY
+                cursor_y += LINE_H
+            else:
+                tb = sl.shapes.add_textbox(x, cursor_y, COL_W, LINE_H).text_frame
+                tb.margin_left = tb.margin_top = tb.margin_bottom = 0
+                tb.word_wrap = True
+                p = tb.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
+                r = p.add_run(); r.text = f"›  {text}"
+                # smaller font for long items
+                fsize = Pt(8) if len(text) > 50 else Pt(9)
+                r.font.name = "Gotham SSm Bold"; r.font.size = fsize; r.font.bold = False
+                r.font.color.rgb = accent_color
+                sl._indice_runs.append((r, text))
+                cursor_y += LINE_H
+
+    render_col(col1, COL_X1)
+    render_col(col2, COL_X2)
+    sl._indice_theme = theme_label
+    return sl
+
+
+def _wire_strategy_hyperlinks(prs, indice_patrimonial, indice_sucessorio, strategy_slides):
+    """Second pass: wire internal hyperlinks now that all slides exist.
+    `strategy_slides` is dict {strategy_name → slide}."""
+    from pptx.oxml.ns import qn
+    from copy import deepcopy
+
+    def add_internal_link(run, target_slide):
+        """Make a run hyperlink to an internal slide. python-pptx supports this
+        via run.hyperlink.address only for external URLs. For internal slide
+        navigation we manually add an <a:hlinkClick> with r:id pointing to a
+        slide relationship of type 'slide'."""
+        # Find the parent slide of the run
+        # We need to know which slide this run is on. We'll search.
+        target_part = target_slide.part
+        # Each slide.part can add a relationship to another slide
+        # Find which slide owns this run by walking up XML
+        run_elem = run._r
+        slide_elem = run_elem
+        while slide_elem is not None and slide_elem.tag != qn('p:sld'):
+            slide_elem = slide_elem.getparent()
+        # That gets us the slide XML, but we need the slide_part to add the rel.
+        # Walk prs.slides to find which slide contains this run.
+        owner = None
+        for sl in prs.slides:
+            if sl.element is slide_elem:
+                owner = sl; break
+        if owner is None:
+            return
+        # Add relationship to target slide
+        rId = owner.part.relate_to(target_part, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide')
+        # Inject <a:hlinkClick r:id="rId" action="ppaction://hlinksldjump"/> into run properties
+        rPr = run_elem.find(qn('a:rPr'))
+        if rPr is None:
+            rPr = run_elem.makeelement(qn('a:rPr'), {})
+            run_elem.insert(0, rPr)
+        # Remove existing hlinkClick if any
+        for h in rPr.findall(qn('a:hlinkClick')):
+            rPr.remove(h)
+        hlink = rPr.makeelement(qn('a:hlinkClick'), {
+            qn('r:id'): rId,
+            'action': 'ppaction://hlinksldjump',
+        })
+        rPr.append(hlink)
+
+    # Wire indice → strategy slides
+    for indice in (indice_patrimonial, indice_sucessorio):
+        for run, strategy_name in indice._indice_runs:
+            target = strategy_slides.get(strategy_name)
+            if target is not None:
+                add_internal_link(run, target)
+
+    # Wire strategy back-links → indice
+    for sname, sl in strategy_slides.items():
+        if hasattr(sl, '_strategy_back_run'):
+            theme = sl._strategy_theme
+            target = indice_patrimonial if theme == "Planejamento Patrimonial" else indice_sucessorio
+            add_internal_link(sl._strategy_back_run, target)
+
+
+def _append_strategy_slides(prs):
+    """Adds index + sketch slides. Returns (indice_p, indice_s, strategy_slides)
+    so the caller can wire additional hyperlinks (e.g. from the redesigned
+    slide 2)."""
+    # Indices first so they exist for back-links
+    indice_p = _add_indice_slide(prs, "Planejamento Patrimonial", STRATEGY_BLUE, PATRIMONIAL_STRATEGIES)
+    indice_s = _add_indice_slide(prs, "Planejamento Sucessório",  STRATEGY_YELLOW, SUCESSORIO_STRATEGIES)
+
+    strategy_slides = {}
+    for sub_name, items in PATRIMONIAL_STRATEGIES:
+        for sname in items:
+            sl = _add_strategy_sketch_slide(prs, sname, STRATEGY_BLUE, "Planejamento Patrimonial")
+            strategy_slides[sname] = sl
+    for sub_name, items in SUCESSORIO_STRATEGIES:
+        for sname in items:
+            sl = _add_strategy_sketch_slide(prs, sname, STRATEGY_YELLOW, "Planejamento Sucessório")
+            strategy_slides[sname] = sl
+
+    _wire_strategy_hyperlinks(prs, indice_p, indice_s, strategy_slides)
+    return indice_p, indice_s, strategy_slides
+
+
+# Category → 2 strategies mapping for the redesigned slide-2 callouts.
+# (1 patrimonial + 1 sucessório per category when applicable.)
+CATEGORY_STRATEGIES = {
+    "Bens Imóveis": [
+        ("Holding Imobiliária", "patrimonial"),
+        ("Doações (simples, com encargos, com reserva de usufruto, com cláusulas restritivas)", "sucessorio"),
+    ],
+    "Bens Móveis": [
+        ("Doações (simples, com encargos, com reserva de usufruto, com cláusulas restritivas)", "sucessorio"),
+    ],
+    # The DIRPF data labels this category as "Bens Móveis / Veículos / Arte"
+    # (the JSON name), so we need a key matching that exact string for the
+    # dict.get() in the callout builder to find any strategies.
+    "Bens Móveis / Veículos / Arte": [
+        ("Doações (simples, com encargos, com reserva de usufruto, com cláusulas restritivas)", "sucessorio"),
+        ("Testamentos com cláusulas restritivas", "sucessorio"),
+    ],
+    "Participações Societárias": [
+        ("Governança Corporativa (Acordo de Sócios, Estatuto, Regimentos Internos)", "patrimonial"),
+        ("Acordo de Acionistas com cláusulas sucessórias (tag along, drag along, opção de compra)", "sucessorio"),
+    ],
+    "Aplicações e Investimentos": [
+        ("Fundo Exclusivo / Fundo Fechado", "patrimonial"),
+    ],
+    "Previdência Privada": [
+        ("Beneficiários em previdência privada (VGBL/PGBL)", "sucessorio"),
+    ],
+    "Créditos e Direitos": [
+        ("Mútuo (empréstimo entre partes relacionadas)", "patrimonial"),
+    ],
+    "Contas Bancárias e Saldos": [],
+    # JSON-name match for ordinary bank accounts. Seguro de Vida is the
+    # liquidity-bridging successoral tool that lawyers typically pair with
+    # heavily liquid asset classes.
+    "Contas Bancárias": [
+        ("Seguro de Vida (como ferramenta de liquidez sucessória)", "sucessorio"),
+    ],
+    "Criptoativos": [],
+    "Remuneração Variável em Equity": [],
+    # PPT-only bucket — show both Patrimonial and Sucessório for previdência since
+    # the bucket includes Previdência + Cripto + Equity
+    "Outros (Previdência, Cripto, Equity)": [
+        ("Beneficiários em previdência privada (VGBL/PGBL)", "sucessorio"),
+    ],
+}
+
+
+def short_strategy(s, max_len=42):
+    """Truncate long strategy names for callout display."""
+    s = s.split(" (")[0]   # strip parenthetical detail
+    if len(s) > max_len:
+        s = s[:max_len] + "…"
+    return s
+
+
+def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
+                            indice_p, indice_s, strategy_slides):
+    """Draw the redesigned slide 2: donut centered + 6 callouts around with
+    category name, value, percentage, and 0–2 strategy hyperlinks each.
+    Two big bottom buttons link to the Patrimonial / Sucessório indices."""
+    from pptx.util import Inches, Emu, Pt
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.enum.text import PP_ALIGN
+    from pptx.dml.color import RGBColor
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.oxml.ns import qn
+    import math
+
+    # Lighter strategy colors for legibility on white
+    STRAT_BLUE_DARK   = RGBColor(0x2D, 0x5C, 0x7F)
+    STRAT_YELLOW_DARK = RGBColor(0xB8, 0xA6, 0x10)
+
+    # Wipe ONLY the old data shapes (chart + value table); keep all chrome
+    # (Picture 2/10 patterns, PATRIMON.IA, COMPOSIÇÃO PATRIMONIAL title,
+    # confidencial, page number) so slide 2 matches the chrome of slides 3+.
+    import re as _re
+    _DATA_RE = _re.compile(r'^(Rectangle|TextBox)\s*(\d+)$')
+    for sh in list(sl.shapes):
+        if sh.has_chart:
+            sh.element.getparent().remove(sh.element)
+            continue
+        m = _DATA_RE.match(sh.name or '')
+        if m and 454 <= int(m.group(2)) <= 480:
+            sh.element.getparent().remove(sh.element)
+
+    # NOTE: chrome (PATRIMON.IA, COMPOSIÇÃO PATRIMONIAL lime ribbon, HSA
+    # box top-right, navy footer band with CONFIDENCIAL + page number)
+    # is already present in the template via Picture 2 / Picture 10 /
+    # Text Box62 / Text 7 / Text Box65 / TextBox 13. We do NOT rebuild it.
+
+    # ── LAYOUT: pie centred, 6 callout slots in 6 angular zones around it.
+    # Each callout has a colour-square + name + value + %. Leader from
+    # slice midpoint goes 2 segments: radial outward, then diagonal to the
+    # callout anchor (kept entirely outside the pie). Arrowhead on the
+    # callout end so direction is obvious.
+    import math as _math
+    from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE
+    from pptx.oxml.ns import qn as _qn
+    from lxml import etree as _etree
+
+    NAVY_SHADES = ['1E2D3A', '2D4356', '3D5871', '5C7791', '8DA5BF', 'B8CCDD']
+
+    # ── PIE CHART (centred) ──
+    PIE_DIA = Inches(3.4)
+    PIE_X = (prs_w - PIE_DIA) // 2
+    PIE_Y = Inches(2.55)
+    PIE_CX = PIE_X + PIE_DIA // 2
+    PIE_CY = PIE_Y + PIE_DIA // 2
+    PIE_R  = PIE_DIA // 2
+
+    chart_data = CategoryChartData()
+    chart_data.categories = [name for name, _ in br_sorted]
+    chart_data.add_series("", [val for _, val in br_sorted])
+    chart_shape = sl.shapes.add_chart(
+        XL_CHART_TYPE.PIE, PIE_X, PIE_Y, PIE_DIA, PIE_DIA, chart_data
+    )
+    chart = chart_shape.chart
+    chart.has_title = False
+    chart.has_legend = False
+    plot = chart.plots[0]
+    plot.has_data_labels = False
+    for i, point in enumerate(plot.series[0].points):
+        fill = point.format.fill
+        fill.solid()
+        fill.fore_color.rgb = RGBColor.from_string(NAVY_SHADES[i % len(NAVY_SHADES)])
+
+    # ── TOTAL donut hole ──
+    HOLE = Inches(1.55)
+    HOLE_X = PIE_X + (PIE_DIA - HOLE) // 2
+    HOLE_Y = PIE_Y + (PIE_DIA - HOLE) // 2
+    hole = sl.shapes.add_shape(MSO_SHAPE.OVAL, HOLE_X, HOLE_Y, HOLE, HOLE)
+    hole.fill.solid(); hole.fill.fore_color.rgb = WHITE
+    hole.line.color.rgb = GRAY_LT; hole.line.width = Pt(0.5)
+    tot_sh = sl.shapes.add_textbox(HOLE_X, HOLE_Y, HOLE, HOLE)
+    tot_tf = tot_sh.text_frame
+    tot_tf.auto_size = MSO_AUTO_SIZE.NONE; tot_tf.word_wrap = True
+    tot_tf.margin_left = tot_tf.margin_right = tot_tf.margin_top = tot_tf.margin_bottom = 0
+    tot_tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    p = tot_tf.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
+    r = p.add_run(); r.text = "TOTAL"
+    r.font.name = "Gotham SSm Bold"; r.font.size = Pt(10); r.font.color.rgb = GRAY_MED; r.font.bold = True
+    p2 = tot_tf.add_paragraph(); p2.alignment = PP_ALIGN.CENTER
+    r2 = p2.add_run(); r2.text = _brl_short(total_br)
+    r2.font.name = "Gotham SSm Bold"; r2.font.size = Pt(18); r2.font.color.rgb = NAVY; r2.font.bold = True
+
+    # ── CALLOUT SLOTS (6 side slots — 3 left, 3 right, no slots above the
+    # pie). This is the layout for "titles beside each piece": every
+    # callout sits beside the pie's left or right edge at one of three
+    # vertical positions (top, mid, bot). Eliminates the cramped top zone
+    # where multiple callouts used to compete for the same band of space.
+    CALLOUT_W = Inches(3.3)
+    CALLOUT_H = Inches(1.05)
+    SLOTS = [
+        # (callout_x, callout_y, side, anchor_x, anchor_y)
+        (Inches(0.30), Inches(1.65), "left",  Inches(0.30)+CALLOUT_W,    Inches(1.65)+CALLOUT_H//2),  # left-top
+        (Inches(0.30), Inches(3.65), "left",  Inches(0.30)+CALLOUT_W,    Inches(3.65)+CALLOUT_H//2),  # left-mid
+        (Inches(0.30), Inches(5.20), "left",  Inches(0.30)+CALLOUT_W,    Inches(5.20)+CALLOUT_H//2),  # left-bot
+        (Inches(9.70), Inches(1.65), "right", Inches(9.70),              Inches(1.65)+CALLOUT_H//2),  # right-top
+        (Inches(9.70), Inches(3.65), "right", Inches(9.70),              Inches(3.65)+CALLOUT_H//2),  # right-mid
+        (Inches(9.70), Inches(5.20), "right", Inches(9.70),              Inches(5.20)+CALLOUT_H//2),  # right-bot
+    ]
+
+    def _slot_angle(slot):
+        _, _, _, ax, ay = slot
+        dx = ax - PIE_CX; dy = ay - PIE_CY
+        a = _math.atan2(dx, -dy)
+        return a if a >= 0 else a + 2*_math.pi
+    slot_angles = [_slot_angle(s) for s in SLOTS]
+
+    # Pie slice midangles (0 = 12 o'clock, CW)
+    _total_vals = sum(v for _, v in br_sorted[:6]) or 1
+    slice_midangles = []
+    _cum = 0
+    for _, _v in br_sorted[:6]:
+        slice_midangles.append((_cum + _v/2) / _total_vals * 2 * _math.pi)
+        _cum += _v
+
+    def _ang_dist(a, b):
+        d = abs(a - b) % (2*_math.pi)
+        return min(d, 2*_math.pi - d)
+
+    # Greedy: bigger slices claim their preferred slot first.
+    slice_order = sorted(range(len(br_sorted[:6])), key=lambda i: -br_sorted[i][1])
+    slice_to_slot = {}
+    used = set()
+    for si in slice_order:
+        best, bestd = None, float('inf')
+        for sj in range(len(SLOTS)):
+            if sj in used: continue
+            d = _ang_dist(slice_midangles[si], slot_angles[sj])
+            if d < bestd: bestd, best = d, sj
+        slice_to_slot[si] = best
+        used.add(best)
+
+    def _add_arrow_tail(conn):
+        ln = conn.line._get_or_add_ln()
+        for e in ln.findall(_qn('a:tailEnd')):
+            ln.remove(e)
+        t = _etree.SubElement(ln, _qn('a:tailEnd'))
+        t.set('type','triangle'); t.set('w','med'); t.set('len','med')
+
+    # Helper: textbox with fixed frame (no autofit shenanigans)
+    def _fixed_tf(x, y, w, h):
+        tf = sl.shapes.add_textbox(x, y, w, h).text_frame
+        tf.auto_size = MSO_AUTO_SIZE.NONE; tf.word_wrap = True
+        tf.margin_left = tf.margin_right = tf.margin_top = tf.margin_bottom = 0
+        return tf
+
+    callout_strategy_runs = []
+    RADIAL_EXT = Inches(0.40)
+
+    for i, (name, val) in enumerate(br_sorted[:6]):
+        slot_idx = slice_to_slot[i]
+        cx, cy, side, ax, ay = SLOTS[slot_idx]
+        pct = (val / total_br * 100) if total_br else 0
+        slice_color = NAVY_SHADES[i % len(NAVY_SHADES)]
+        ang = slice_midangles[i]
+
+        # Leader segment 1: slice midpoint → radial extension point.
+        # For severe angle mismatch we STRETCH the radial extension so it
+        # lands at a high "shelf" above the top-band callouts; this keeps
+        # the CONTAS leader's horizontal segment ABOVE the BENS MÓVEIS
+        # callout, instead of running at the same y as BENS MÓVEIS' leader.
+        ELBOW_THRESHOLD     = _math.radians(45)
+        TALL_ELBOW_THRESHOLD = _math.radians(70)
+        slot_ang = slot_angles[slot_idx]
+        mismatch = _ang_dist(ang, slot_ang)
+        use_elbow = mismatch > ELBOW_THRESHOLD
+        use_tall  = mismatch > TALL_ELBOW_THRESHOLD
+
+        s1x = PIE_CX + int(_math.sin(ang) * PIE_R)
+        s1y = PIE_CY - int(_math.cos(ang) * PIE_R)
+
+        if use_tall:
+            # Tall L: stretch the radial so s2 lands JUST above (or below)
+            # the pie, so the horizontal "shelf" segment hugs the pie's
+            # edge instead of escaping all the way up to the slide header.
+            # Visually this places the upper portion of the leader BELOW
+            # the top-band callouts' title text (BENS IMÓVEIS / BENS MÓVEIS),
+            # which is what the user wants.
+            if s1y < PIE_CY:
+                target_y = PIE_Y - Inches(0.15)
+                dy_needed = PIE_CY - target_y
+                cos_a = _math.cos(ang)
+            else:
+                target_y = PIE_Y + PIE_DIA + Inches(0.15)
+                dy_needed = target_y - PIE_CY
+                cos_a = -_math.cos(ang)
+            # Distance along the radial vector that yields the desired |dy|.
+            # For slices near the side of the pie (cos near 0) the radial
+            # would have to extend almost forever, so we fall back to a
+            # safe fixed length and let segment 2 absorb the rest.
+            if cos_a > 0.15:
+                radial_dist = dy_needed / cos_a
+            else:
+                radial_dist = PIE_R + Inches(0.30)
+            s2x = PIE_CX + int(_math.sin(ang) * radial_dist)
+            s2y = PIE_CY - int(_math.cos(ang) * radial_dist)
+        else:
+            s2x = PIE_CX + int(_math.sin(ang) * (PIE_R + RADIAL_EXT))
+            s2y = PIE_CY - int(_math.cos(ang) * (PIE_R + RADIAL_EXT))
+
+        c1 = sl.shapes.add_connector(1, int(s1x), int(s1y), int(s2x), int(s2y))
+        c1.line.color.rgb = RGBColor.from_string(slice_color); c1.line.width = Pt(1.5)
+
+        # Routing from radial extension to callout anchor.
+        if use_elbow:
+            if use_tall:
+                # s2 is already at the high shelf; horizontal segment runs
+                # right along it.
+                shelf_y = s2y
+            elif s2y < PIE_CY:
+                shelf_y = min(s2y, PIE_Y - Inches(0.10))
+            else:
+                shelf_y = max(s2y, PIE_Y + PIE_DIA + Inches(0.10))
+            if ax > PIE_CX:
+                elbow_x = PIE_X + PIE_DIA + Inches(0.05)
+            else:
+                elbow_x = PIE_X - Inches(0.05)
+            elbow_pt = (int(elbow_x), int(shelf_y))
+            c2 = sl.shapes.add_connector(1, int(s2x), int(s2y),
+                                            elbow_pt[0], elbow_pt[1])
+            c2.line.color.rgb = RGBColor.from_string(slice_color); c2.line.width = Pt(1.5)
+            c3 = sl.shapes.add_connector(1, elbow_pt[0], elbow_pt[1],
+                                            int(ax), int(ay))
+            c3.line.color.rgb = RGBColor.from_string(slice_color); c3.line.width = Pt(1.5)
+            _add_arrow_tail(c3)
+        else:
+            # Low mismatch — clean direct diagonal is fine.
+            c2 = sl.shapes.add_connector(1, int(s2x), int(s2y), int(ax), int(ay))
+            c2.line.color.rgb = RGBColor.from_string(slice_color); c2.line.width = Pt(1.5)
+            _add_arrow_tail(c2)
+
+        # Callout text: bullet + name on line 1, value + % on line 2,
+        # up to 2 strategy hyperlinks on lines 3-4.
+        align = (PP_ALIGN.CENTER if side == "top"
+                 else PP_ALIGN.LEFT if side == "right"
+                 else PP_ALIGN.RIGHT)
+        head = _fixed_tf(cx, cy, CALLOUT_W, Inches(0.24))
+        p = head.paragraphs[0]; p.alignment = align
+        rb = p.add_run(); rb.text = "■ "
+        rb.font.size = Pt(10); rb.font.color.rgb = RGBColor.from_string(slice_color); rb.font.bold = True
+        rn = p.add_run(); rn.text = name.upper()
+        rn.font.name = "Gotham SSm Bold"; rn.font.size = Pt(8); rn.font.color.rgb = GRAY_MED; rn.font.bold = True
+        valbox = _fixed_tf(cx, cy + Inches(0.22), CALLOUT_W, Inches(0.32))
+        p = valbox.paragraphs[0]; p.alignment = align
+        rv = p.add_run(); rv.text = f"{_brl_short(val)}  "
+        rv.font.name = "Gotham SSm Bold"; rv.font.size = Pt(13); rv.font.color.rgb = NAVY; rv.font.bold = True
+        rp = p.add_run(); rp.text = f"({pct:.1f}%)"
+        rp.font.name = "Gotham SSm Bold"; rp.font.size = Pt(9); rp.font.color.rgb = GRAY_MED
+
+        # Strategy hyperlinks — up to 2, beneath the value line. Direction
+        # arrow (›/‹) matches the callout's side so the eye knows which
+        # text is clickable and which way it "points" into the index slide.
+        strategies = CATEGORY_STRATEGIES.get(name, [])[:2]
+        for j, (sname, theme) in enumerate(strategies):
+            s_y = cy + Inches(0.56) + j * Inches(0.20)
+            stf = _fixed_tf(cx, s_y, CALLOUT_W, Inches(0.20))
+            p = stf.paragraphs[0]; p.alignment = align
+            color = STRAT_BLUE_DARK if theme == "patrimonial" else STRAT_YELLOW_DARK
+            if side == "right":
+                txt = f"› {short_strategy(sname)}"
+            elif side == "left":
+                txt = f"{short_strategy(sname)} ‹"
+            else:  # top
+                txt = f"› {short_strategy(sname)}"
+            rs = p.add_run(); rs.text = txt
+            rs.font.name = "Gotham SSm Bold"; rs.font.size = Pt(8); rs.font.color.rgb = color; rs.font.bold = True
+            rs.font.underline = True
+            callout_strategy_runs.append((rs, sname))
+
+    # ── 2 big bottom buttons ──
+    BTN_W = Inches(3.5); BTN_H = Inches(0.50)
+    BTN_GAP = Inches(0.30)
+    BTN_Y = prs_h - Inches(1.30)
+    BTN_X1 = (prs_w - BTN_W*2 - BTN_GAP) // 2
+    BTN_X2 = BTN_X1 + BTN_W + BTN_GAP
+
+    def _make_button(x, y, label, fill_color, text_color):
+        btn = sl.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, x, y, BTN_W, BTN_H)
+        btn.fill.solid(); btn.fill.fore_color.rgb = fill_color
+        btn.line.fill.background()
+        tf = btn.text_frame
+        tf.margin_left = tf.margin_top = tf.margin_bottom = 0
+        p = tf.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
+        r = p.add_run(); r.text = label
+        r.font.name = "Gotham SSm Bold"; r.font.size = Pt(11); r.font.color.rgb = text_color; r.font.bold = True
+        return r
+
+    btn_p_run = _make_button(BTN_X1, BTN_Y, "📋  Ver Estratégias Patrimoniais", STRAT_BLUE_DARK, WHITE)
+    btn_s_run = _make_button(BTN_X2, BTN_Y, "📋  Ver Estratégias Sucessórias", STRAT_YELLOW_DARK, WHITE)
+
+    # NOTE: footer (navy band + CONFIDENCIAL + page number) intentionally
+    # NOT rebuilt — template's Picture 10 / Text Box65 / TextBox 13 are
+    # preserved by the selective-wipe at the top of this function, so
+    # slide 2's footer now matches slides 3+.
+
+    # ── Wire hyperlinks ──
+    # Strategy runs in callouts → individual strategy slides
+    for run, strategy_name in callout_strategy_runs:
+        target = strategy_slides.get(strategy_name)
+        if target is not None:
+            _internal_hyperlink(sl, run, target)
+    # Bottom buttons → indices
+    _internal_hyperlink(sl, btn_p_run, indice_p)
+    _internal_hyperlink(sl, btn_s_run, indice_s)
+
+
+def _brl_short(v):
+    """Compact BRL: R$ 5.0M / R$ 612K / R$ 0,00"""
+    if v >= 1_000_000_000: return f"R$ {v/1e9:.1f}B"
+    if v >= 1_000_000:     return f"R$ {v/1e6:.1f}M"
+    if v >= 1_000:         return f"R$ {v/1e3:.0f}K"
+    return f"R$ {v:,.0f}".replace(",", ".")
+
+
+def _internal_hyperlink(slide, run, target_slide):
+    """Make a run hyperlink to an internal slide via <a:hlinkClick>."""
+    from pptx.oxml.ns import qn
+    target_part = target_slide.part
+    rId = slide.part.relate_to(
+        target_part,
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide'
+    )
+    run_elem = run._r
+    rPr = run_elem.find(qn('a:rPr'))
+    if rPr is None:
+        rPr = run_elem.makeelement(qn('a:rPr'), {})
+        run_elem.insert(0, rPr)
+    for h in rPr.findall(qn('a:hlinkClick')):
+        rPr.remove(h)
+    hlink = rPr.makeelement(qn('a:hlinkClick'), {
+        qn('r:id'): rId,
+        'action': 'ppaction://hlinksldjump',
+    })
+    rPr.append(hlink)
+
+
 def build_deck(data, output_path):
     agg = aggregate(data)
     CLIENT   = agg['client']
@@ -20630,7 +21409,20 @@ def build_deck(data, output_path):
 
     prs = Presentation(output_path)
 
-    # ── helper: text replace ─────────────────────────────────────────────────
+    # ── Fix slide number style on all slides (TextBox 13) ────────────────────
+    # Template has it bold + inherited color. We want: Gotham SSm Black, NOT
+    # bold, grey (#8E959B), 9pt — matching the reference screenshot.
+    for sl in prs.slides:
+        for sh in sl.shapes:
+            if sh.name == 'TextBox 13' and hasattr(sh, 'text_frame'):
+                for para in sh.text_frame.paragraphs:
+                    for run in para.runs:
+                        run.font.name  = 'Gotham SSm Black'
+                        run.font.bold  = False
+                        run.font.size  = Pt(11.7)
+                        run.font.color.rgb = GRAY_MED
+                break
+
     def rep(slide, old, new):
         for sh in slide.shapes:
             if hasattr(sh,'text_frame') and old in sh.text:
@@ -20671,32 +21463,41 @@ def build_deck(data, output_path):
     BR_TOTAL_STR = brl(TOTAL_BR)
 
     # ── Slide 2: composition ─────────────────────────────────────────────────
-    # category labels (uppercase). Replace longest first to avoid substring clash
+    # Replace template labels with real category names. We do this in ONE atomic
+    # pass per text frame using direct XML find/replace, so a substitution in
+    # slot 0 can't affect the label of slot 2 (the old approach of replacing
+    # one at a time could create substring collisions: e.g. setting slot 0 to
+    # "BENS IMÓVEIS" then trying to find "IMÓVEIS" for slot 2 would match the
+    # newly-written slot-0 text).
     s2 = prs.slides[1]
-    # Order CG labels by length desc for safe replace
-    for cg_idx in sorted(range(6), key=lambda k: -len(CG_LBL_UPPER[k])):
-        rep(s2, CG_LBL_UPPER[cg_idx], slots[cg_idx]['name'].upper())
-    for cg_idx in range(6):
-        rep(s2, CG_VALS[cg_idx], slots[cg_idx]['val_str'])
-        rep(s2, CG_PCTS[cg_idx], slots[cg_idx]['pct_str'])
-    rep(s2, 'R$ 50.3M', BR_TOTAL_STR)
 
-    # FIX #12b: also replace the NEW template's hardcoded sample values.
-    # The Carol G strings above ('R$ 23.7M', 'PART. SOCIETÁRIAS', etc.) don't
-    # exist in the redesigned template — its placeholders use different
-    # values and full names. rep() returns early on no-match, so adding these
-    # fallback patterns is safe for the old template too.
-    NEW_LBL_UPPER = ['PARTICIPAÇÕES SOCIETÁRIAS','APLICAÇÕES E INVESTIMENTOS',
-                     'BENS IMÓVEIS','CRÉDITOS E DIREITOS','BENS MÓVEIS',
-                     'CONTAS BANCÁRIAS E SALDOS']
-    NEW_VALS = ['R$ 45.2M','R$ 17.6M','R$ 13.2M','R$ 2.4M','R$ 1.8M','R$ 612K']
-    NEW_PCTS = ['(55.9%)','(21.8%)','(16.3%)','(2.9%)','(2.3%)','(0.8%)']
-    for cg_idx in sorted(range(6), key=lambda k: -len(NEW_LBL_UPPER[k])):
-        rep(s2, NEW_LBL_UPPER[cg_idx], slots[cg_idx]['name'].upper())
-    for cg_idx in range(6):
-        rep(s2, NEW_VALS[cg_idx], slots[cg_idx]['val_str'])
-        rep(s2, NEW_PCTS[cg_idx], f"({slots[cg_idx]['pct_str']})")
-    rep(s2, 'R$ 80.9M', BR_TOTAL_STR)
+    # Build name+value+pct triples. We need to map template-text → real text
+    # for each slot. The template carries the exact strings in CG_LBL_UPPER /
+    # CG_VALS / CG_PCTS, one per slot.
+    label_map = {}
+    val_map   = {}
+    pct_map   = {}
+    for i in range(6):
+        label_map[CG_LBL_UPPER[i]] = slots[i]['name'].upper()
+        val_map[CG_VALS[i]]        = slots[i]['val_str']
+        pct_map[CG_PCTS[i]]        = slots[i]['pct_str']
+
+    def _replace_runs(textframe, mapping):
+        """For each run inside textframe, if its exact text matches a key in
+        `mapping`, replace it with the value. Atomic per-run — no substring."""
+        for para in textframe.paragraphs:
+            for run in para.runs:
+                t = run.text
+                if t in mapping:
+                    run.text = mapping[t]
+
+    for sh in s2.shapes:
+        if not hasattr(sh, 'text_frame'):
+            continue
+        _replace_runs(sh.text_frame, label_map)
+        _replace_runs(sh.text_frame, val_map)
+        _replace_runs(sh.text_frame, pct_map)
+    rep(s2, 'R$ 50.3M', BR_TOTAL_STR)
 
     # FIX #1: the template highlights row 2 with lime (Rectangle 458 = D4E142).
     # That highlight is arbitrary per-client noise — normalise row 2 to the
@@ -20775,28 +21576,20 @@ def build_deck(data, output_path):
     ]
     by_name = {sh.name: sh for sh in s2.shapes}
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # FIX #12: detect template version and route layout fixes accordingly.
-    #
-    #   OLD layout (Carol G template) → 6-row value table on the RIGHT
-    #   (Rectangle 454/458/.../478, TextBox 455-480) + pie on the left. The
-    #   block below (FIX #5/#7/#8/#10) was written for this layout.
-    #
-    #   NEW layout (redesigned slide 2) → six callouts placed AROUND a TOTAL
-    #   oval, with the pie chart meant to sit BEHIND the oval (donut effect).
-    #   The template already ships Connector 8/13/17 (leftside) and 22/26/30
-    #   (rightside) pre-positioned to fan from each callout's inner edge to
-    #   the centred pie. None of the old shape names exist here, so most of
-    #   the FIX block silently no-ops — EXCEPT the unconditional pie left-
-    #   shift below, which pushes the chart off-design and makes its bounding
-    #   box overlap the leftside callouts. Symptom: "PARTICIPAÇÕES
-    #   SOCIETÁRIAS / R$ X.XM" rendered on top of dark pie slices, illegible.
-    #
-    # The fix: only run the legacy left-shift on the old layout; on the new
-    # layout, centre the pie on the TOTAL oval's centre point. Old behaviour
-    # is preserved bit-for-bit when Rectangle 454 is present.
-    # ─────────────────────────────────────────────────────────────────────────
-    HAS_OLD_LAYOUT = 'Rectangle 454' in by_name
+    # Hide empty slots (val == 0) — make the rect background transparent and
+    # set all text to white so nothing shows. Keeps geometry intact.
+    for i, rect_name in enumerate(ROW_RECTS):
+        if slots[i]['val'] == 0:
+            rect = by_name.get(rect_name)
+            if rect is not None:
+                rect.fill.background()
+                rect.line.fill.background()
+            for tb_name in ROW_TBOXES[i]:
+                tb = by_name.get(tb_name)
+                if tb is not None:
+                    for para in tb.text_frame.paragraphs:
+                        for run in para.runs:
+                            run.font.color.rgb = WHITE
 
     # FIX #5: rebalance slide 2 layout — pie was left-skewed and value table
     # was off-centre on the right half. Shift both toward slide centre.
@@ -20807,23 +21600,10 @@ def build_deck(data, output_path):
     RECT_SHIFT_X = 350_000   # value table moves right modestly (keeps 480 on slide)
 
     # Move pie chart
-    if HAS_OLD_LAYOUT:
-        for sh in s2.shapes:
-            if sh.has_chart:
-                sh.left = Emu(sh.left + PIE_SHIFT_X)
-                break
-    else:
-        # NEW layout: centre the chart on the TOTAL oval (Oval 6 at
-        # x=5_364_480 w=1_463_040 → centre 6_096_000; y=2_743_200 h=1_463_040
-        # → centre 3_474_720). Connectors are already drawn from each
-        # callout's inner edge to where the centred pie's outer ring will be,
-        # so this single move is enough to fix the layout.
-        TOTAL_CX, TOTAL_CY = 6_096_000, 3_474_720
-        for sh in s2.shapes:
-            if sh.has_chart:
-                sh.left = Emu(TOTAL_CX - sh.width  // 2)
-                sh.top  = Emu(TOTAL_CY - sh.height // 2)
-                break
+    for sh in s2.shapes:
+        if sh.has_chart:
+            sh.left = Emu(sh.left + PIE_SHIFT_X)
+            break
 
     # Shift all row rects + their 3 textboxes + TOTAL bar/labels
     SHIFT_SHAPES = (
@@ -20889,16 +21669,18 @@ def build_deck(data, output_path):
                 for run in para.runs:
                     run.font.size = Pt(12)
 
-    # TOTAL bar: sits just below the last row. Made taller so table bottom
-    # aligns with the extended pie chart bottom (see FIX #8).
+    # TOTAL bar: thinner now (was 876_000 EMU, looked too thick). We compensate
+    # by adding a bigger gap above it so the table's overall bottom (and the
+    # pie's bottom) stays at the same y as before — keeping pie ↔ table aligned.
     total_rect = by_name.get(TOTAL_RECT)
     if total_rect is not None:
-        new_total_top = FIRST_TOP + 5*STRIDE + NEW_ROW_H + 70_000
-        NEW_TOTAL_H = 876_000           # was 566_928 — taller to match pie extent
+        NEW_TOTAL_H   = 500_000          # was 876_000 — slimmer
+        EXTRA_GAP     = 446_000          # absorb the height we removed (876-500+70=446)
+        new_total_top = FIRST_TOP + 5*STRIDE + NEW_ROW_H + EXTRA_GAP
         total_rect.top = Emu(new_total_top)
         total_rect.height = Emu(NEW_TOTAL_H)
         total_h = NEW_TOTAL_H
-        # move the TOTAL GERAL label + value to the new bar's vertical centre
+        # centre the TOTAL GERAL label + value vertically inside the slimmer bar
         bar_mid = new_total_top + total_h//2
         tb479 = by_name.get('TextBox 479')   # "TOTAL GERAL"
         tb480 = by_name.get('TextBox 480')   # value
@@ -20908,7 +21690,7 @@ def build_deck(data, output_path):
             tb480.top = Emu(bar_mid - 210_000)
 
         # FIX #8: align the pie chart vertically with the value table —
-        # same top, same bottom, balanced side-by-side proportions.
+        # same top, same bottom. Bottom is the bottom of the TOTAL bar.
         TABLE_TOP    = FIRST_TOP
         TABLE_BOTTOM = new_total_top + total_h
         for sh in s2.shapes:
@@ -20926,6 +21708,27 @@ def build_deck(data, output_path):
         rep(s3, CG_VALS[cg_idx], slots[cg_idx]['val_str'])
         rep(s3, CG_PCTS[cg_idx], slots[cg_idx]['pct_str'])
     rep(s3, 'R$ 50.3M', BR_TOTAL_STR)
+
+    # Hide KPI cards on slide 3 for empty slots (val == 0) —
+    # The 6 KPI rectangles in the template are named 'Rectangle 484..489'
+    # (or similar). We find them by matching the category label text we just
+    # wrote and make them invisible, same technique as slide 2.
+    # Instead of guessing rect names, find ALL textboxes on s3 that contain
+    # the placeholder "—" (which we wrote for empty slots) and hide the
+    # rectangle that overlaps them.
+    s3_by_name = {sh.name: sh for sh in s3.shapes}
+    for cg_idx in range(6):
+        if slots[cg_idx]['val'] == 0:
+            # Make label, value and pct text white (invisible on white background)
+            for placeholder in (CG_LBL_TITLE[cg_idx], CG_VALS[cg_idx], CG_PCTS[cg_idx]):
+                for sh in s3.shapes:
+                    if hasattr(sh, 'text') and sh.text.strip() in ('—', placeholder, slots[cg_idx]['val_str']):
+                        try:
+                            for para in sh.text_frame.paragraphs:
+                                for run in para.runs:
+                                    run.font.color.rgb = WHITE
+                        except Exception:
+                            pass
 
     # ── Slide 4: participações ───────────────────────────────────────────────
     s4 = prs.slides[3]
@@ -20981,12 +21784,24 @@ def build_deck(data, output_path):
         bar = next(sh.chart for sh in s3.shapes if sh.has_chart)
         cd2 = CategoryChartData(); cd2.categories = cats; cd2.add_series('', vals)
         bar.replace_data(cd2)
-        recolor_chart(bar, ['283944'])           # all bars navy
+        # Blue gradient palette — DARKEST for the largest bar, LIGHTEST for the
+        # smallest. cats come from br_sorted which is DESCENDING (largest at
+        # index 0, smallest at the end). So i=0 → DARK, i=n-1 → LIGHT.
+        n = len(cats)
+        BLUE_DARK  = (32, 60, 92)     # ~ #203c5c — biggest bar
+        BLUE_LIGHT = (158, 188, 222)  # ~ #9ebcde — smallest bar
+        def _lerp(a, b, t): return int(round(a + (b - a) * t))
+        def _hex(rgb): return '{:02X}{:02X}{:02X}'.format(*rgb)
+        gradient = []
+        for i in range(n):
+            t = i / max(1, n - 1)   # largest (i=0) → t=0 → DARK; smallest → t=1 → LIGHT
+            gradient.append(_hex(tuple(_lerp(BLUE_DARK[k], BLUE_LIGHT[k], t) for k in range(3))))
+        recolor_chart(bar, gradient)
         # FIX #6: bigger axis category labels (the names beside each bar)
         try:
-            bar.category_axis.tick_labels.font.size = Pt(11)
-            bar.category_axis.tick_labels.font.bold = True
-            bar.category_axis.tick_labels.font.name = 'Gotham SSm Bold'
+            bar.category_axis.tick_labels.font.size = Pt(12)
+            bar.category_axis.tick_labels.font.bold = False
+            bar.category_axis.tick_labels.font.name = 'Gotham SSm Black'
         except Exception: pass
 
     # Slide 4 charts
@@ -21012,9 +21827,9 @@ def build_deck(data, output_path):
         # FIX #6 (cont'd): bigger axis category labels on both s4 charts
         for ch in (br_chart, off_chart):
             try:
-                ch.category_axis.tick_labels.font.size = Pt(11)
-                ch.category_axis.tick_labels.font.bold = True
-                ch.category_axis.tick_labels.font.name = 'Gotham SSm Bold'
+                ch.category_axis.tick_labels.font.size = Pt(12)
+                ch.category_axis.tick_labels.font.bold = False
+                ch.category_axis.tick_labels.font.name = 'Gotham SSm Black'
             except Exception: pass
 
     # ── Slide 5: organograma patrimonial ─────────────────────────────────────
@@ -21038,11 +21853,13 @@ def build_deck(data, output_path):
 
     # FIX #4: Brazil flag as the national-assets hub node
     brazil_flag(s5, CX5, FLAG_CY, w=300_000)
-    T(s5, "ATIVOS NO BRASIL", CX5-1_500_000, FLAG_CY+115_000, 3_000_000, fh(7),
+    # Label below flag — push down enough that the connector line doesn't cross it
+    LABEL_Y = FLAG_CY + 145_000
+    T(s5, "ATIVOS NO BRASIL", CX5-1_500_000, LABEL_Y, 3_000_000, fh(7),
       pt=7, bold=True, col=GRAY_MED, align='center', font='Gotham SSm Bold')
 
     # horizontal distributor — snug below the flag label
-    HDIST_Y = FLAG_CY + 115_000 + fh(7) + 45_000
+    HDIST_Y = LABEL_Y + fh(7) + 45_000
     L(s5, CX5, FLAG_CY+90_000, CX5, HDIST_Y)
 
     # BR boxes — taller, generous internal spacing (no overlap)
@@ -21075,7 +21892,7 @@ def build_deck(data, output_path):
         OBY = BRT+BH+150_000
         OBX = CX5-1_350_000
         R(s5, OBX, OBY, 2_700_000, 360_000, fill=NAVY)
-        T(s5,"OFFSHORE",OBX+100_000,OBY+85_000,2_500_000,fh(13),
+        T(s5,"OFFSHORE",OBX,OBY,2_700_000,360_000,
           pt=13,bold=True,col=WHITE,align='center',font='Gotham SSm Bold')
         L(s5, CX5, BRT+BH, CX5, OBY)
         OFL = OBY+360_000
@@ -21190,6 +22007,53 @@ def build_deck(data, output_path):
         Person(s6,CX6,DY+220_000,sz=230_000,col=GRAY_LT)
         T(s6,"SEM DEPENDENTES",DX+70_000,DY+400_000,DW-140_000,fh(9),
           pt=9,bold=True,col=GRAY_MED,align='center',font='Gotham SSm Bold')
+
+    # ── Append strategy slides FIRST (índices + slides vazios sketch) ────────
+    # We must append BEFORE removing slide 3 — python-pptx auto-numbers new
+    # slide files based on the current count. If we remove slide 3 first, the
+    # new slide 6 we add will collide with the template's existing slide6.xml,
+    # producing two relationships pointing to the same XML file → PowerPoint
+    # "needs repair" warning and broken layout.
+    indice_p, indice_s, strategy_slides = _append_strategy_slides(prs)
+
+    # ── Now safely remove slide 3 (DETALHAMENTO DOS ATIVOS — bar chart) ──────
+    # Deck is now: Cover, Composição, Brasil/Offshore, Org Patrimonial,
+    # Org Familiar + 2 índices + 27 strategy sketches = 34 slides.
+    # IMPORTANT: must remove (a) sldId element, (b) relationship from presentation,
+    # (c) the slide part itself.
+    sldIdLst = prs.slides._sldIdLst
+    ids = list(sldIdLst)
+    if len(ids) > 2:
+        slide3_id_elem = ids[2]
+        slide3_rId = slide3_id_elem.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+        slide3_part = prs.part.related_part(slide3_rId)
+        sldIdLst.remove(slide3_id_elem)
+        try:
+            prs.part.rels.pop(slide3_rId)
+        except (KeyError, AttributeError):
+            pass
+        try:
+            del prs.part.package._parts[slide3_part.partname]
+        except (AttributeError, KeyError):
+            pass
+
+    # ── Redesign slide 2 (composition) — replace original layout ─────────────
+    # Use br aggregated data (same source the original slide used)
+    s2_new = prs.slides[1]
+    _draw_redesigned_slide2(
+        s2_new, prs.slide_width, prs.slide_height,
+        br, TOTAL_BR,
+        indice_p, indice_s, strategy_slides,
+    )
+
+    # Re-number TextBox 13 (slide number) on every remaining slide
+    for slide_num, sl in enumerate(prs.slides, start=1):
+        for sh in sl.shapes:
+            if sh.name == 'TextBox 13' and hasattr(sh, 'text_frame'):
+                for para in sh.text_frame.paragraphs:
+                    for run in para.runs:
+                        run.text = str(slide_num)
+                break
 
     prs.save(output_path)
 
