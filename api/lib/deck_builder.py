@@ -21313,6 +21313,10 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, sorted_items, total,
         fill.fore_color.rgb = RGBColor.from_string(NAVY_SHADES[i % len(NAVY_SHADES)])
 
     # ── TOTAL donut hole ──
+    # Sized to align visually with the category card values (10pt) — the
+    # previous 10pt+18pt combo dominated the slide ("screaming"); 7pt label
+    # + 13pt value still reads as the focal centre but doesn't fight with
+    # the category callouts for attention.
     HOLE = Inches(1.55)
     HOLE_X = PIE_X + (PIE_DIA - HOLE) // 2
     HOLE_Y = PIE_Y + (PIE_DIA - HOLE) // 2
@@ -21326,10 +21330,10 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, sorted_items, total,
     tot_tf.vertical_anchor = MSO_ANCHOR.MIDDLE
     p = tot_tf.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
     r = p.add_run(); r.text = "TOTAL"
-    r.font.name = "Gotham SSm Bold"; r.font.size = Pt(10); r.font.color.rgb = GRAY_MED; r.font.bold = True
+    r.font.name = "Gotham SSm Bold"; r.font.size = Pt(7); r.font.color.rgb = GRAY_MED; r.font.bold = True
     p2 = tot_tf.add_paragraph(); p2.alignment = PP_ALIGN.CENTER
     r2 = p2.add_run(); r2.text = _brl_short(total_br)
-    r2.font.name = "Gotham SSm Bold"; r2.font.size = Pt(18); r2.font.color.rgb = NAVY; r2.font.bold = True
+    r2.font.name = "Gotham SSm Bold"; r2.font.size = Pt(13); r2.font.color.rgb = NAVY; r2.font.bold = True
 
     # ── CALLOUT SLOTS (6 side slots — 3 left, 3 right, no slots above the
     # pie). This is the layout for "titles beside each piece": every
@@ -21613,19 +21617,38 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, sorted_items, total,
 
         _draw_curved_leader(s1x, s1y, ax, ay, slice_color, bulge_factor[i])
 
-        # Callout text: bullet + name on line 1, value + % on line 2,
-        # up to 2 strategy hyperlinks on lines 3-4.
-        align = (PP_ALIGN.CENTER if side == "top"
-                 else PP_ALIGN.LEFT if side == "right"
-                 else PP_ALIGN.RIGHT)
-        head = _fixed_tf(cx, cy, CALLOUT_W, Inches(0.24))
-        p = head.paragraphs[0]; p.alignment = align
-        rb = p.add_run(); rb.text = "■ "
-        rb.font.size = Pt(10); rb.font.color.rgb = RGBColor.from_string(slice_color); rb.font.bold = True
-        # For long "Outros (...)" labels with 4+ bundled categories, the
-        # parenthetical doesn't fit on one line at 8pt. Split: show
-        # "OUTROS" on the title line and the bundled list at 7pt on the
-        # next line so the value (line 2 of the callout) doesn't collide.
+        # ── CALLOUT CARD ──────────────────────────────────────────────
+        # Colored card behind the title+value (background = slice color).
+        # Text inside auto-adapts: WHITE on the 4 darker NAVY_SHADES, NAVY
+        # on the 2 lighter shades so the title+value stay legible on every
+        # card regardless of slice darkness. Strategies sit BELOW the card
+        # in white space so their themed gold/blue colours stay readable.
+        # Card holds 2 lines: title (line 1) + "Valor: R$ X.XM (Y.Y%)"
+        # (line 2). Both at the same 10pt Gotham SSm Bold per request —
+        # picking a single shared style for both lines makes the slide read
+        # uniformly across the 6 callouts.
+        CARD_H = Inches(0.62)
+        card = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, cx, cy, CALLOUT_W, CARD_H)
+        card.fill.solid(); card.fill.fore_color.rgb = RGBColor.from_string(slice_color)
+        card.line.color.rgb = RGBColor.from_string(slice_color)
+        card.line.width = Pt(0.5)
+        # Pick contrasting text colour. Index in NAVY_SHADES decides:
+        # shades 0-3 are dark enough to need white text; shades 4-5 (the
+        # pale tints) need navy text to stay readable.
+        light_shade = (i % len(NAVY_SHADES)) >= 4
+        card_text_color = NAVY if light_shade else WHITE
+
+        # Text frame inside the card. Padding kept tight (4pt all-round)
+        # since the card is small.
+        card.text_frame.margin_left = Pt(8)
+        card.text_frame.margin_right = Pt(8)
+        card.text_frame.margin_top = Pt(4)
+        card.text_frame.margin_bottom = Pt(4)
+        card.text_frame.word_wrap = True
+        ctf = card.text_frame
+        # Title (line 1) — no bullet anymore. The card itself IS the colour
+        # indicator, making the Unicode ■ redundant.
+        p = ctf.paragraphs[0]; p.alignment = PP_ALIGN.LEFT
         display_name = name
         sub_line = None
         if name.startswith("Outros (") and name.endswith(")"):
@@ -21635,31 +21658,34 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, sorted_items, total,
                 display_name = "Outros"
                 sub_line = inner
         rn = p.add_run(); rn.text = display_name.upper()
-        rn.font.name = "Gotham SSm Bold"; rn.font.size = Pt(8); rn.font.color.rgb = GRAY_MED; rn.font.bold = True
+        rn.font.name = "Gotham SSm Bold"; rn.font.size = Pt(10)
+        rn.font.color.rgb = card_text_color; rn.font.bold = True
         if sub_line:
-            psub = head.add_paragraph(); psub.alignment = align
+            # Long bundled "Outros (...)" list shown on a sub-line at a
+            # smaller size so it doesn't compete with the title.
+            psub = ctf.add_paragraph(); psub.alignment = PP_ALIGN.LEFT
             rs = psub.add_run(); rs.text = f"({sub_line})"
-            rs.font.name = "Gotham SSm"; rs.font.size = Pt(6); rs.font.color.rgb = GRAY_MED; rs.font.italic = True
-        val_y_offset = Inches(0.34) if sub_line else Inches(0.22)
-        valbox = _fixed_tf(cx, cy + val_y_offset, CALLOUT_W, Inches(0.32))
-        p = valbox.paragraphs[0]; p.alignment = align
-        rv = p.add_run(); rv.text = f"{_brl_short(val)}  "
-        rv.font.name = "Gotham SSm Bold"; rv.font.size = Pt(13); rv.font.color.rgb = NAVY; rv.font.bold = True
-        rp = p.add_run(); rp.text = f"({pct:.1f}%)"
-        rp.font.name = "Gotham SSm Bold"; rp.font.size = Pt(9); rp.font.color.rgb = GRAY_MED
+            rs.font.name = "Gotham SSm"; rs.font.size = Pt(6)
+            rs.font.color.rgb = card_text_color; rs.font.italic = True
+        # Value line — "Valor:" prefix as user requested so the client
+        # sees explicit labelling. Same 10pt Bold as the title.
+        pv = ctf.add_paragraph(); pv.alignment = PP_ALIGN.LEFT
+        rv_label = pv.add_run(); rv_label.text = "Valor: "
+        rv_label.font.name = "Gotham SSm Bold"; rv_label.font.size = Pt(10)
+        rv_label.font.color.rgb = card_text_color; rv_label.font.bold = True
+        rv = pv.add_run(); rv.text = f"{_brl_short(val)} "
+        rv.font.name = "Gotham SSm Bold"; rv.font.size = Pt(10)
+        rv.font.color.rgb = card_text_color; rv.font.bold = True
+        rp = pv.add_run(); rp.text = f"({pct:.1f}%)"
+        rp.font.name = "Gotham SSm Bold"; rp.font.size = Pt(8)
+        rp.font.color.rgb = card_text_color
+        rp.font.bold = False
 
-        # Strategy hyperlinks — up to 2, beneath the value line. Direction
-        # arrow (›/‹) matches the callout's side so the eye knows which
-        # text is clickable and which way it "points" into the index slide.
-        # IMPORTANT: the hyperlink is attached to the textbox SHAPE (cNvPr),
-        # NOT to the text run. If it were on the run, PowerPoint would
-        # substitute the run's text colour with the theme's hyperlink
-        # colour, wiping out the gold/blue distinction we set below.
-        # Resolve the strategies to show under this callout. For a regular
-        # category that's just a CATEGORY_STRATEGIES lookup. For the
-        # synthetic "Outros (...)" bucket, no direct entry exists — so we
-        # pool the strategies of the underlying bundled categories
-        # (deduped, keeping first occurrence; capped at 2 to fit the slot).
+        # Strategy hyperlinks — sit BELOW the card in white space so their
+        # themed colours (STRAT_BLUE_DARK for patrimonial, STRAT_YELLOW_DARK
+        # for sucessório) stay legible regardless of card darkness. Each
+        # line: "Alternativa sugerida: <strategy name>" — no arrows, since
+        # the user found the › / ‹ ugly.
         if name in outros_components:
             pooled = []
             seen = set()
@@ -21672,44 +21698,91 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, sorted_items, total,
         else:
             strategies = CATEGORY_STRATEGIES.get(name, [])[:2]
         for j, (sname, theme) in enumerate(strategies):
-            s_y = cy + Inches(0.56) + j * Inches(0.20)
+            s_y = cy + CARD_H + Inches(0.04) + j * Inches(0.20)
             stx_shape = sl.shapes.add_textbox(cx, s_y, CALLOUT_W, Inches(0.20))
             stf = stx_shape.text_frame
             stf.auto_size = MSO_AUTO_SIZE.NONE; stf.word_wrap = True
             stf.margin_left = stf.margin_right = stf.margin_top = stf.margin_bottom = 0
-            p = stf.paragraphs[0]; p.alignment = align
+            p = stf.paragraphs[0]; p.alignment = PP_ALIGN.LEFT
             color = STRAT_BLUE_DARK if theme == "patrimonial" else STRAT_YELLOW_DARK
-            if side == "right":
-                txt = f"› {short_strategy(sname)}"
-            elif side == "left":
-                txt = f"{short_strategy(sname)} ‹"
-            else:  # top
-                txt = f"› {short_strategy(sname)}"
-            rs = p.add_run(); rs.text = txt
-            rs.font.name = "Gotham SSm Bold"; rs.font.size = Pt(8); rs.font.color.rgb = color; rs.font.bold = True
+            # "Alternativa sugerida: " label in slightly muted weight, then
+            # the strategy name in bold so the eye picks the actionable bit.
+            r_lbl = p.add_run(); r_lbl.text = "Alternativa sugerida: "
+            r_lbl.font.name = "Gotham SSm"; r_lbl.font.size = Pt(7)
+            r_lbl.font.color.rgb = GRAY_MED; r_lbl.font.italic = True
+            rs = p.add_run(); rs.text = short_strategy(sname)
+            rs.font.name = "Gotham SSm Bold"; rs.font.size = Pt(8)
+            rs.font.color.rgb = color; rs.font.bold = True
             rs.font.underline = True
             callout_strategy_shapes.append((stx_shape, sname))
 
-    # ── 2 big bottom buttons ──
-    BTN_W = Inches(3.5); BTN_H = Inches(0.50)
-    BTN_GAP = Inches(0.30)
-    BTN_Y = prs_h - Inches(1.30)
-    BTN_X1 = (prs_w - BTN_W*2 - BTN_GAP) // 2
-    BTN_X2 = BTN_X1 + BTN_W + BTN_GAP
+    # ── Bottom legend box ─────────────────────────────────────────────
+    # Replaces the previous pair of big rounded buttons ("Ver Estratégias
+    # Patrimoniais / Sucessórias") — those felt too app-like. New design:
+    # one compact card with two legend rows, each row = small colored
+    # square swatch + theme name + clickable hyperlink phrase. The swatches
+    # double as the visual legend explaining what the strategy colours mean
+    # throughout the slide (navy = patrimonial, gold = sucessório).
+    LEG_W = Inches(7.6)
+    LEG_H = Inches(0.90)
+    LEG_X = (prs_w - LEG_W) // 2
+    LEG_Y = prs_h - Inches(1.30)
+    leg_card = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, LEG_X, LEG_Y, LEG_W, LEG_H)
+    leg_card.fill.solid(); leg_card.fill.fore_color.rgb = WHITE
+    leg_card.line.color.rgb = GRAY_LT; leg_card.line.width = Pt(0.5)
+    leg_card.text_frame.margin_left = Pt(0)
+    leg_card.text_frame.margin_right = Pt(0)
+    leg_card.text_frame.margin_top = Pt(0)
+    leg_card.text_frame.margin_bottom = Pt(0)
 
-    def _make_button(x, y, label, fill_color, text_color):
-        btn = sl.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, x, y, BTN_W, BTN_H)
-        btn.fill.solid(); btn.fill.fore_color.rgb = fill_color
-        btn.line.fill.background()
-        tf = btn.text_frame
-        tf.margin_left = tf.margin_top = tf.margin_bottom = 0
-        p = tf.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
-        r = p.add_run(); r.text = label
-        r.font.name = "Gotham SSm Bold"; r.font.size = Pt(11); r.font.color.rgb = text_color; r.font.bold = True
-        return r
+    def _draw_legend_row(row_y, swatch_color, theme_label, link_text, link_run_target):
+        """Draw one legend row: colored square + theme label + hyperlink text.
+        Returns the hyperlink run so the caller can wire it to the indice
+        slide. row_y is absolute (slide coords)."""
+        SWATCH = Inches(0.18)
+        # Swatch positioned with a small left padding inside the card
+        sw_x = LEG_X + Inches(0.20)
+        # Centre the swatch vertically within the row
+        sw_y = row_y + (Inches(0.20) - SWATCH) // 2 + Inches(0.04)
+        sq = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, sw_x, sw_y, SWATCH, SWATCH)
+        sq.fill.solid(); sq.fill.fore_color.rgb = swatch_color
+        sq.line.fill.background()
+        # Text right after the swatch
+        text_x = sw_x + SWATCH + Inches(0.12)
+        text_w = LEG_X + LEG_W - text_x - Inches(0.20)
+        tb = sl.shapes.add_textbox(text_x, row_y, text_w, Inches(0.28))
+        ttf = tb.text_frame
+        ttf.margin_left = ttf.margin_right = ttf.margin_top = ttf.margin_bottom = 0
+        ttf.word_wrap = True
+        p = ttf.paragraphs[0]; p.alignment = PP_ALIGN.LEFT
+        r1 = p.add_run(); r1.text = theme_label + " — "
+        r1.font.name = "Gotham SSm Bold"; r1.font.size = Pt(10)
+        r1.font.color.rgb = swatch_color; r1.font.bold = True
+        r2 = p.add_run(); r2.text = link_text
+        r2.font.name = "Gotham SSm"; r2.font.size = Pt(10)
+        r2.font.color.rgb = swatch_color
+        r2.font.italic = True; r2.font.underline = True
+        return tb  # we'll attach the hyperlink at shape level (preserves color)
 
-    btn_p_run = _make_button(BTN_X1, BTN_Y, "📋  Ver Estratégias Patrimoniais", STRAT_BLUE_DARK, WHITE)
-    btn_s_run = _make_button(BTN_X2, BTN_Y, "📋  Ver Estratégias Sucessórias", STRAT_YELLOW_DARK, WHITE)
+    # Two rows inside the legend card, vertically centred together
+    row_h = Inches(0.28)
+    row_gap = Inches(0.05)
+    total_rows_h = row_h * 2 + row_gap
+    rows_top = LEG_Y + (LEG_H - total_rows_h) // 2
+    leg_p_shape = _draw_legend_row(
+        rows_top,
+        STRAT_BLUE_DARK,
+        "Planejamento Patrimonial",
+        "clique aqui para aprofundamento das estratégias patrimoniais",
+        indice_p,
+    )
+    leg_s_shape = _draw_legend_row(
+        rows_top + row_h + row_gap,
+        STRAT_YELLOW_DARK,
+        "Planejamento Sucessório",
+        "clique aqui para aprofundamento das estratégias sucessórias",
+        indice_s,
+    )
 
     # NOTE: footer (navy band + CONFIDENCIAL + page number) intentionally
     # NOT rebuilt — template's Picture 10 / Text Box65 / TextBox 13 are
@@ -21728,11 +21801,11 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, sorted_items, total,
         target = strategy_slides.get(strategy_name)
         if target is not None:
             _shape_internal_hyperlink(sl, shape, target)
-    # Bottom buttons → indices. These keep run-level hyperlinks since the
-    # button shapes have a solid fill behind the text and the substituted
-    # hyperlink colour is barely visible there.
-    _internal_hyperlink(sl, btn_p_run, indice_p)
-    _internal_hyperlink(sl, btn_s_run, indice_s)
+    # Bottom legend → indice slides. Shape-level hyperlinks (cNvPr) so the
+    # italic gold/blue styling we set in _draw_legend_row isn't substituted
+    # for PowerPoint's theme hyperlink colour.
+    _shape_internal_hyperlink(sl, leg_p_shape, indice_p)
+    _shape_internal_hyperlink(sl, leg_s_shape, indice_s)
 
 
 def _brl_short(v):
