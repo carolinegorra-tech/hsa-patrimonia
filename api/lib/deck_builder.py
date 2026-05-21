@@ -21726,7 +21726,11 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, sorted_items, total,
     LEG_W = Inches(7.6)
     LEG_H = Inches(0.90)
     LEG_X = (prs_w - LEG_W) // 2
-    LEG_Y = prs_h - Inches(1.30)
+    # Footer (Picture 10 — the navy band with CONFIDENCIAL + page #) starts
+    # at ~7.01" on the 7.5" slide. The previous Y placed the legend bottom
+    # at prs_h - 0.40 = 7.10" which clipped into the footer band. Bump up
+    # to leave a ~0.15" breathing strip between the legend and the footer.
+    LEG_Y = prs_h - Inches(1.55)
     leg_card = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, LEG_X, LEG_Y, LEG_W, LEG_H)
     leg_card.fill.solid(); leg_card.fill.fore_color.rgb = WHITE
     leg_card.line.color.rgb = GRAY_LT; leg_card.line.width = Pt(0.5)
