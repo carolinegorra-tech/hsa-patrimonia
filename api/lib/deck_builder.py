@@ -22443,6 +22443,31 @@ def build_deck(data, output_path):
         jurisdiction='Exterior',
     )
 
+    # ── Remove slide 4 (was PARTICIPAÇÕES SOCIETÁRIAS — twin bar-chart
+    # breakdown of BR vs Offshore for Participações). Redundant now that
+    # slides 2 (BRASIL) and 3 (EXTERIOR) already present that comparison
+    # via the composition donuts. ──────────────────────────────────────────
+    sldIdLst = prs.slides._sldIdLst
+    ids = list(sldIdLst)
+    if len(ids) > 3:
+        s4_id_elem = ids[3]
+        s4_rId = s4_id_elem.get(
+            '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+        try:
+            s4_part = prs.part.related_part(s4_rId)
+        except (KeyError, AttributeError):
+            s4_part = None
+        sldIdLst.remove(s4_id_elem)
+        try:
+            prs.part.rels.pop(s4_rId)
+        except (KeyError, AttributeError):
+            pass
+        if s4_part is not None:
+            try:
+                del prs.part.package._parts[s4_part.partname]
+            except (AttributeError, KeyError):
+                pass
+
     # Re-number TextBox 13 (slide number) on every remaining slide
     for slide_num, sl in enumerate(prs.slides, start=1):
         for sh in sl.shapes:
