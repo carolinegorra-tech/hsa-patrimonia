@@ -21276,47 +21276,34 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
     # where multiple callouts used to compete for the same band of space.
     CALLOUT_W = Inches(3.3)
     CALLOUT_H = Inches(1.05)
-    SLOTS = [
-        # (callout_x, callout_y, side, anchor_x, anchor_y)
-        (Inches(0.30), Inches(1.65), "left",  Inches(0.30)+CALLOUT_W,    Inches(1.65)+CALLOUT_H//2),  # left-top
-        (Inches(0.30), Inches(3.65), "left",  Inches(0.30)+CALLOUT_W,    Inches(3.65)+CALLOUT_H//2),  # left-mid
-        (Inches(0.30), Inches(5.20), "left",  Inches(0.30)+CALLOUT_W,    Inches(5.20)+CALLOUT_H//2),  # left-bot
-        (Inches(9.70), Inches(1.65), "right", Inches(9.70),              Inches(1.65)+CALLOUT_H//2),  # right-top
-        (Inches(9.70), Inches(3.65), "right", Inches(9.70),              Inches(3.65)+CALLOUT_H//2),  # right-mid
-        (Inches(9.70), Inches(5.20), "right", Inches(9.70),              Inches(5.20)+CALLOUT_H//2),  # right-bot
-    ]
+    LEFT_X    = Inches(0.30)
+    RIGHT_X   = Inches(9.70)
 
     # Pie slice midangles (0 = 12 o'clock, CW). Slices are drawn in the
     # order of br_sorted (largest first), so index i corresponds to the
     # i-th slice on the pie going CW from 12 o'clock.
     _total_vals = sum(v for _, v in br_sorted[:6]) or 1
     slice_midangles = []
+    slice_arc_starts = []
+    slice_arc_ends   = []
     _cum = 0
     for _, _v in br_sorted[:6]:
-        slice_midangles.append((_cum + _v/2) / _total_vals * 2 * _math.pi)
+        s = _cum / _total_vals * 2 * _math.pi
+        e = (_cum + _v) / _total_vals * 2 * _math.pi
+        slice_midangles.append((s + e) / 2)
+        slice_arc_starts.append(s)
+        slice_arc_ends.append(e)
         _cum += _v
 
-    # ── ORDER-BASED SLOT ASSIGNMENT ──
-    # Greedy nearest-angle assignment fails when several small slices cluster
-    # near the same pie angle (e.g. BENS MÓVEIS + CONTAS both at 12 o'clock):
-    # both want the same slot, the loser ends up with a leader that has to
-    # cross another callout to reach its slice.
-    #
-    # New approach: assign slots in the SAME CW ORDER as the slices appear
-    # on the pie. With order-preserving assignment, two leaders can never
-    # cross each other regardless of how the slices are distributed.
+    # ── SIDE ASSIGNMENT (which slices go to left column vs right column) ──
     n_slices = len(br_sorted[:6])
-
-    # Step 1: tentative side per slice based on midangle. Left half of the
-    # pie (180°–360°) feeds the left column; right half feeds the right.
     sides_arr = ['left' if _math.pi < m <= 2*_math.pi else 'right'
                   for m in slice_midangles[:n_slices]]
     left_idxs  = [i for i, s in enumerate(sides_arr) if s == 'left']
     right_idxs = [i for i, s in enumerate(sides_arr) if s == 'right']
 
-    # Step 2: rebalance — at most 3 slices per side. Slices to move across
-    # are the ones closest to the top wrap (midangle near 0°/360°) since
-    # their callouts work naturally on either side.
+    # Rebalance: at most 3 slices per side. Move slices closest to the
+    # 12-o'clock wrap across, since they're geometrically near both sides.
     while len(left_idxs) > 3:
         mv = min(left_idxs, key=lambda i: 2*_math.pi - slice_midangles[i])
         sides_arr[mv] = 'right'; left_idxs.remove(mv); right_idxs.append(mv)
@@ -21324,23 +21311,98 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
         mv = min(right_idxs, key=lambda i: slice_midangles[i])
         sides_arr[mv] = 'left'; right_idxs.remove(mv); left_idxs.append(mv)
 
-    # Step 3: order within each side so the topmost slot gets the slice
-    # whose CW position is closest to 12 o'clock.
-    # LEFT: midangle DESC (higher midangle = closer to 360° = top-left).
-    # RIGHT: midangle ASC with wrap (midangles > 180° wrap negative so
-    # near-top slices come first).
-    left_idxs.sort(key=lambda i: -slice_midangles[i])
-    right_idxs.sort(key=lambda i: slice_midangles[i] - 2*_math.pi
-                                   if slice_midangles[i] > _math.pi
-                                   else slice_midangles[i])
+    # ── SPREAD ARROW ANCHOR ANGLES ──
+    # When two slices are adjacent on the pie AND go to callouts on the
+    # same side (e.g. Bens Móveis 345° + Outros 355° — only 10° apart),
+    # their arrow start points overlap visually, making it look like both
+    # arrows point to the same segment. Push each anchor along its own
+    # slice's arc to enforce a minimum angular separation.
+    anchor_angles = list(slice_midangles)
+    spatial_order = sorted(range(n_slices), key=lambda i: slice_midangles[i])
+    MIN_ANGLE_SEP = _math.radians(22)
+    ARC_MARGIN    = _math.radians(2)  # keep anchor at least this far inside slice
+    for _ in range(5):
+        for k in range(len(spatial_order)):
+            i = spatial_order[k]
+            j = spatial_order[(k + 1) % len(spatial_order)]
+            if sides_arr[i] != sides_arr[j]:
+                continue
+            diff = anchor_angles[j] - anchor_angles[i]
+            if diff < 0:
+                diff += 2 * _math.pi
+            if diff < MIN_ANGLE_SEP:
+                push = (MIN_ANGLE_SEP - diff) / 2
+                # Push slice i CCW (toward its arc start)
+                max_push_i = max(0, anchor_angles[i] - slice_arc_starts[i] - ARC_MARGIN)
+                anchor_angles[i] -= min(push, max_push_i)
+                # Push slice j CW (toward its arc end)
+                max_push_j = max(0, slice_arc_ends[j] - anchor_angles[j] - ARC_MARGIN)
+                anchor_angles[j] += min(push, max_push_j)
 
-    LEFT_SLOT_INDICES  = [0, 1, 2]   # left-top, left-mid, left-bot
-    RIGHT_SLOT_INDICES = [3, 4, 5]   # right-top, right-mid, right-bot
-    slice_to_slot = {}
-    for k, i in enumerate(left_idxs):
-        slice_to_slot[i] = LEFT_SLOT_INDICES[k]
-    for k, i in enumerate(right_idxs):
-        slice_to_slot[i] = RIGHT_SLOT_INDICES[k]
+    # ── DYNAMIC SLOT PLACEMENT ──
+    # Instead of fixed Y positions (1.65 / 3.65 / 5.20), each callout's Y is
+    # computed from its slice's natural Y on the pie edge. With callouts at
+    # their slice's own Y level, the leader is nearly horizontal and never
+    # has to cross another leader to reach a different vertical band.
+    # Greedy top-down placement enforces a minimum gap between callouts;
+    # the last callout is clamped so it never enters the button zone.
+    MIN_CALLOUT_TOP    = Inches(1.10)
+    MAX_CALLOUT_BOTTOM = Inches(6.05)  # buttons start at Y=6.20, leave 0.15in gap
+    MIN_CALLOUT_GAP    = Inches(0.15)
+
+    def _place_side(idxs, x_pos, side_name):
+        """Return {slice_idx → (cx, cy, side, anchor_x, anchor_y)}. Callouts
+        are ordered by spatial CW position on the pie (not by Y projection),
+        so the slice geographically furthest along the slide's vertical
+        edge gets the topmost slot."""
+        if not idxs:
+            return {}
+        ideal = []
+        for i in idxs:
+            ang = anchor_angles[i]
+            y_pie_edge = PIE_CY - int(_math.cos(ang) * PIE_R)
+            ideal.append((i, y_pie_edge - CALLOUT_H // 2))
+
+        # Sort by angular CW spatial order on the pie:
+        # - LEFT side: midangle DESC (closer to 360° wrap = upper-left → top)
+        # - RIGHT side: wrapped midangle ASC (wrapped slices from 270-360°
+        #   range take precedence so their longer leaders can route along
+        #   the top of the pie at the highest slot)
+        if side_name == 'left':
+            ideal.sort(key=lambda x: -anchor_angles[x[0]])
+        else:
+            def _right_key(item):
+                a = anchor_angles[item[0]]
+                return a - 2*_math.pi if a > _math.pi else a
+            ideal.sort(key=_right_key)
+
+        # Forward pass: push down to satisfy MIN_TOP and minimum gap
+        placed = []
+        cursor = MIN_CALLOUT_TOP
+        for i, y in ideal:
+            y = max(y, cursor)
+            placed.append([i, y])
+            cursor = y + CALLOUT_H + MIN_CALLOUT_GAP
+
+        # Backward pass: if anything overshoots MAX_BOTTOM, cascade upward
+        max_top = MAX_CALLOUT_BOTTOM - CALLOUT_H
+        for k in range(len(placed)-1, -1, -1):
+            if placed[k][1] > max_top:
+                placed[k][1] = max_top
+                max_top = max_top - CALLOUT_H - MIN_CALLOUT_GAP
+            else:
+                break
+
+        result = {}
+        for i, y in placed:
+            ax = x_pos if side_name == 'right' else x_pos + CALLOUT_W
+            ay = y + CALLOUT_H // 2
+            result[i] = (x_pos, y, side_name, ax, ay)
+        return result
+
+    slot_assignments = {}
+    slot_assignments.update(_place_side(left_idxs,  LEFT_X,  'left'))
+    slot_assignments.update(_place_side(right_idxs, RIGHT_X, 'right'))
 
     def _add_arrow_tail(conn):
         ln = conn.line._get_or_add_ln()
@@ -21357,29 +21419,134 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
         return tf
 
     callout_strategy_shapes = []   # (textbox_shape, strategy_name)
-    RADIAL_EXT = Inches(0.40)
+
+    # Per-slice bulge intensity. The top-slot slice on each side gets a
+    # high bulge when its leader has to traverse across the pie. Other
+    # wrapped slices (rebalanced from their natural geographic side to
+    # the opposite callout column) get a medium bulge so their curves
+    # arc visibly upward off the slice instead of running nearly straight
+    # toward the callout.
+    bulge_factor = [0.10] * n_slices
+    for side_name in ('left', 'right'):
+        if side_name == 'left':
+            _key = lambda i: -anchor_angles[i]
+        else:
+            def _key(i, _a=anchor_angles, _pi=_math.pi):
+                a = _a[i]
+                return a - 2*_pi if a > _pi else a
+        side_sorted = sorted(
+            [i for i in range(n_slices) if sides_arr[i] == side_name],
+            key=_key,
+        )
+        for rank, i in enumerate(side_sorted):
+            ang = anchor_angles[i]
+            natural_side = 'left' if _math.pi < ang <= 2*_math.pi else 'right'
+            is_wrapped = (natural_side != side_name)
+
+            if rank == 0 and len(side_sorted) >= 2:
+                s1x = PIE_CX + _math.sin(ang) * PIE_R
+                s1y = PIE_CY - _math.cos(ang) * PIE_R
+                _, _, _, ax_chk, ay_chk = slot_assignments[i]
+                length = ((ax_chk - s1x)**2 + (ay_chk - s1y)**2) ** 0.5
+                if length > Inches(2.0):
+                    bulge_factor[i] = 0.32  # top slot, long arrow: big arc
+            elif is_wrapped:
+                bulge_factor[i] = 0.22  # wrapped non-top: medium arc
+
+    def _draw_curved_leader(x1, y1, x2, y2, color_hex, factor):
+        """Draw a curved arrow from (x1,y1) to (x2,y2) using a single cubic
+        Bezier that bulges outward from the pie center. `factor` controls
+        the bulge magnitude as a fraction of line length."""
+        # Outward bulge: push control point AWAY from (PIE_CX, PIE_CY)
+        mx = (x1 + x2) / 2.0
+        my = (y1 + y2) / 2.0
+        dx_pie = mx - PIE_CX
+        dy_pie = my - PIE_CY
+        dist_pie = (dx_pie*dx_pie + dy_pie*dy_pie) ** 0.5
+        line_len = ((x2-x1)**2 + (y2-y1)**2) ** 0.5
+        bulge = min(line_len * factor, 800_000)  # cap at ~0.87 inch
+        if dist_pie > 0:
+            ux = dx_pie / dist_pie
+            uy = dy_pie / dist_pie
+            cpx = mx + ux * bulge
+            cpy = my + uy * bulge
+        else:
+            cpx, cpy = mx, my
+
+        # Bounding box including the control point (to size the shape)
+        min_x = min(x1, x2, cpx); max_x = max(x1, x2, cpx)
+        min_y = min(y1, y2, cpy); max_y = max(y1, y2, cpy)
+        box_w = max(int(max_x - min_x), 1)
+        box_h = max(int(max_y - min_y), 1)
+        p_x1 = int(x1 - min_x); p_y1 = int(y1 - min_y)
+        p_x2 = int(x2 - min_x); p_y2 = int(y2 - min_y)
+        p_cpx = int(cpx - min_x); p_cpy = int(cpy - min_y)
+
+        width_emu = int(1.5 * 12700)  # 1.5 pt → EMU
+        # Pick a high shape id that won't collide
+        existing = [int(s.shape_id) for s in sl.shapes if str(s.shape_id).isdigit()]
+        next_id = max(existing, default=1000) + 1
+
+        sp_xml = f'''<p:sp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:nvSpPr>
+    <p:cNvPr id="{next_id}" name="CurvedLeader"/>
+    <p:cNvSpPr/>
+    <p:nvPr/>
+  </p:nvSpPr>
+  <p:spPr>
+    <a:xfrm>
+      <a:off x="{int(min_x)}" y="{int(min_y)}"/>
+      <a:ext cx="{box_w}" cy="{box_h}"/>
+    </a:xfrm>
+    <a:custGeom>
+      <a:avLst/>
+      <a:gdLst/>
+      <a:ahLst/>
+      <a:cxnLst/>
+      <a:rect l="0" t="0" r="0" b="0"/>
+      <a:pathLst>
+        <a:path w="{box_w}" h="{box_h}">
+          <a:moveTo>
+            <a:pt x="{p_x1}" y="{p_y1}"/>
+          </a:moveTo>
+          <a:cubicBezTo>
+            <a:pt x="{p_cpx}" y="{p_cpy}"/>
+            <a:pt x="{p_cpx}" y="{p_cpy}"/>
+            <a:pt x="{p_x2}" y="{p_y2}"/>
+          </a:cubicBezTo>
+        </a:path>
+      </a:pathLst>
+    </a:custGeom>
+    <a:noFill/>
+    <a:ln w="{width_emu}" cap="rnd">
+      <a:solidFill>
+        <a:srgbClr val="{color_hex}"/>
+      </a:solidFill>
+      <a:headEnd type="triangle" w="med" len="med"/>
+    </a:ln>
+  </p:spPr>
+  <p:txBody>
+    <a:bodyPr/>
+    <a:lstStyle/>
+    <a:p><a:endParaRPr lang="pt-BR"/></a:p>
+  </p:txBody>
+</p:sp>'''
+        elem = _etree.fromstring(sp_xml)
+        sl.shapes._spTree.append(elem)
 
     for i, (name, val) in enumerate(br_sorted[:6]):
-        slot_idx = slice_to_slot[i]
-        cx, cy, side, ax, ay = SLOTS[slot_idx]
+        cx, cy, side, ax, ay = slot_assignments[i]
         pct = (val / total_br * 100) if total_br else 0
         slice_color = NAVY_SHADES[i % len(NAVY_SHADES)]
-        ang = slice_midangles[i]
+        ang = anchor_angles[i]   # spread anchor angle (within slice arc)
 
-        # Two-segment leader: short radial extension out of the pie, then
-        # straight line to the callout anchor. With order-based slot
-        # assignment the direct line never crosses the pie and never
-        # overlaps another leader, so no elbows or shelves needed.
+        # Start of leader: at the slice's outer edge at the (spread) anchor
+        # angle. The spread algorithm already keeps each anchor strictly
+        # inside its slice arc, so this point always sits on the slice.
         s1x = PIE_CX + int(_math.sin(ang) * PIE_R)
         s1y = PIE_CY - int(_math.cos(ang) * PIE_R)
-        s2x = PIE_CX + int(_math.sin(ang) * (PIE_R + RADIAL_EXT))
-        s2y = PIE_CY - int(_math.cos(ang) * (PIE_R + RADIAL_EXT))
 
-        c1 = sl.shapes.add_connector(1, int(s1x), int(s1y), int(s2x), int(s2y))
-        c1.line.color.rgb = RGBColor.from_string(slice_color); c1.line.width = Pt(1.5)
-        c2 = sl.shapes.add_connector(1, int(s2x), int(s2y), int(ax), int(ay))
-        c2.line.color.rgb = RGBColor.from_string(slice_color); c2.line.width = Pt(1.5)
-        _add_arrow_tail(c2)
+        _draw_curved_leader(s1x, s1y, ax, ay, slice_color, bulge_factor[i])
 
         # Callout text: bullet + name on line 1, value + % on line 2,
         # up to 2 strategy hyperlinks on lines 3-4.
