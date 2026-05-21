@@ -563,6 +563,10 @@ function App(){
   const [password,setPassword]=useState(()=>sessionStorage.getItem("hsa_pwd")||"");
   const [authRequired,setAuthRequired]=useState(false);
   const [pendingPwd,setPendingPwd]=useState("");
+  // When true, the asset list overrides the jurisdiction-tab view and shows
+  // Brasil + Offshore stacked, each with the DIRPF total (in BRL) in the
+  // header. Triggered by clicking the "Total DIRPF" KPI card.
+  const [dirpfBreakdown,setDirpfBreakdown]=useState(false);
   const dirpfRef=useRef();
   const dcbeRef=useRef();
 
@@ -848,6 +852,10 @@ function App(){
   const nItems=data?.groups?.reduce((a,g)=>a+g.items.length,0)||0;
   const brGrps=data?.groups?.filter(g=>g.jurisdiction==="Brasil")||[];
   const offGrps=data?.groups?.filter(g=>g.jurisdiction==="Offshore")||[];
+  // DIRPF totals per jurisdiction (in BRL). DIRPF declares global assets in
+  // BRL — so this exposes how much of `totDIRPF` came from Brasil vs Offshore.
+  const totDIRPFBrasil=brGrps.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dirpf||0),0),0);
+  const totDIRPFOffshore=offGrps.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dirpf||0),0),0);
 
   // Tab state for verify-screen filtering. Default to "Brasil" if it has
   // groups, otherwise "Offshore". "Todos" picked for each category to show
@@ -1017,10 +1025,17 @@ function App(){
           </div>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:16}}>
-          {[{label:"Total DIRPF",value:brl(totDIRPF),accent:C.text},{label:"Total DCBE (Offshore)",value:(()=>{const t=data?.groups?.filter(g=>g.jurisdiction==="Offshore")?.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dcbe||0),0),0)||0; return t>0?usd(t):"N/A";})(),accent:C.gold},{label:"Ativos Brasil",value:brGrps.reduce((a,g)=>a+g.items.length,0)+" itens",accent:C.green},{label:"Ativos Offshore",value:offGrps.reduce((a,g)=>a+g.items.length,0)+" itens",accent:C.blue}].map(({label,value,accent})=>(
-            <div key={label} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"14px 16px"}}>
-              <p style={{color:C.muted,fontSize:9,fontWeight:700,letterSpacing:"0.15em",marginBottom:6}}>{label}</p>
+          {[
+            {label:"Total DIRPF",value:brl(totDIRPF),accent:C.text,onClick:()=>setDirpfBreakdown(!dirpfBreakdown),interactive:true,active:dirpfBreakdown,hint:"clique p/ ver Brasil vs Offshore"},
+            {label:"Total DCBE (Offshore)",value:(()=>{const t=data?.groups?.filter(g=>g.jurisdiction==="Offshore")?.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dcbe||0),0),0)||0; return t>0?usd(t):"N/A";})(),accent:C.gold},
+            {label:"Ativos Brasil",value:brGrps.reduce((a,g)=>a+g.items.length,0)+" itens",accent:C.green},
+            {label:"Ativos Offshore",value:offGrps.reduce((a,g)=>a+g.items.length,0)+" itens",accent:C.blue}
+          ].map(({label,value,accent,onClick,interactive,active,hint})=>(
+            <div key={label} onClick={onClick} style={{background:active?"rgba(191,148,71,.04)":C.card,border:`${active?1.5:1}px solid ${active?C.gold:C.border}`,borderRadius:10,padding:"14px 16px",cursor:interactive?"pointer":"default",transition:"all .2s",boxShadow:active?"0 4px 16px rgba(191,148,71,.18)":"none",position:"relative"}}>
+              <p style={{color:C.muted,fontSize:9,fontWeight:700,letterSpacing:"0.15em",marginBottom:6}}>{label}{interactive&&<span style={{marginLeft:6,color:active?C.gold:C.dim,fontSize:10}}>{active?"▲":"▼"}</span>}</p>
               <p style={{fontFamily:"'Cormorant Garamond',serif",fontSize:20,fontWeight:600,color:accent}}>{value}</p>
+              {interactive&&!active&&<p style={{color:C.dim,fontSize:9,marginTop:3,fontStyle:"italic"}}>{hint}</p>}
+              {interactive&&active&&<p style={{color:C.gold,fontSize:9,marginTop:3,fontWeight:700,letterSpacing:"0.05em"}}>BR {brl(totDIRPFBrasil)} · OFF {brl(totDIRPFOffshore)}</p>}
             </div>
           ))}
         </div>
@@ -1082,7 +1097,8 @@ function App(){
             )}
           </div>
         )}
-        {/* Jurisdiction tabs (Brasil / Offshore) */}
+        {/* Jurisdiction tabs (Brasil / Offshore) — hidden in DIRPF-breakdown mode */}
+        {!dirpfBreakdown && (
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
           {[
             {
@@ -1162,9 +1178,10 @@ function App(){
             );
           })}
         </div>
+        )}
 
-        {/* Category sub-tabs + add category dropdown */}
-        {activeGrps.length > 0 && (
+        {/* Category sub-tabs + add category dropdown — hidden in DIRPF-breakdown mode */}
+        {!dirpfBreakdown && activeGrps.length > 0 && (
           <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:14,alignItems:"center"}}>
             {["Todos", ...activeGrps.map(g=>g.name)].map(catName => {
               const isActive = activeCat === catName;
@@ -1252,8 +1269,40 @@ function App(){
           </div>
         )}
 
-        {/* Filtered groups */}
-        {visibleGrps.length === 0 ? (
+        {/* Asset list — default = filtered by activeJuris + activeCat;
+            DIRPF-breakdown = both jurisdictions stacked with prominent headers
+            showing the DIRPF total (in BRL) of each. */}
+        {dirpfBreakdown ? (
+          <div style={{marginBottom:20}}>
+            {brGrps.length > 0 && (
+              <div style={{marginBottom:18}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,padding:"14px 20px",background:"rgba(60,174,122,.06)",border:`1.5px solid ${C.green}`,borderRadius:10}}>
+                  <div style={{display:"flex",alignItems:"center",gap:12}}>
+                    <span style={{color:C.green,fontWeight:700,fontSize:24,fontFamily:"'Cormorant Garamond',serif",fontStyle:"italic",lineHeight:1}}>1)</span>
+                    <span style={{color:C.text,fontWeight:700,fontSize:13,letterSpacing:"0.12em"}}>ATIVOS BRASILEIROS</span>
+                    <span style={{background:"rgba(60,174,122,.15)",color:C.green,fontSize:10,padding:"2px 8px",borderRadius:20,fontWeight:700}}>{brGrps.reduce((a,g)=>a+g.items.length,0)} {brGrps.reduce((a,g)=>a+g.items.length,0)===1?"item":"itens"}</span>
+                  </div>
+                  <span style={{color:C.text,fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:700}}>{brl(totDIRPFBrasil)}</span>
+                </div>
+                {brGrps.map(g=><GroupTable key={g.name+g.jurisdiction} group={g} onUpdate={updateItem} onAddItem={addItemToGroup} dragSource={dragSource} setDragSource={setDragSource} onMoveItem={moveItem}/>)}
+              </div>
+            )}
+            {offGrps.length > 0 && (
+              <div style={{marginBottom:18}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,padding:"14px 20px",background:"rgba(191,148,71,.06)",border:`1.5px solid ${C.gold}`,borderRadius:10}}>
+                  <div style={{display:"flex",alignItems:"center",gap:12}}>
+                    <span style={{color:C.gold,fontWeight:700,fontSize:24,fontFamily:"'Cormorant Garamond',serif",fontStyle:"italic",lineHeight:1}}>2)</span>
+                    <span style={{color:C.text,fontWeight:700,fontSize:13,letterSpacing:"0.12em"}}>ATIVOS OFFSHORE</span>
+                    <span style={{background:"rgba(191,148,71,.15)",color:C.gold,fontSize:10,padding:"2px 8px",borderRadius:20,fontWeight:700}}>{offGrps.reduce((a,g)=>a+g.items.length,0)} {offGrps.reduce((a,g)=>a+g.items.length,0)===1?"item":"itens"}</span>
+                    <span style={{color:C.muted,fontSize:9,fontStyle:"italic"}}>valores em BRL conforme DIRPF</span>
+                  </div>
+                  <span style={{color:C.text,fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:700}}>{brl(totDIRPFOffshore)}</span>
+                </div>
+                {offGrps.map(g=><GroupTable key={g.name+g.jurisdiction} group={g} onUpdate={updateItem} onAddItem={addItemToGroup} dragSource={dragSource} setDragSource={setDragSource} onMoveItem={moveItem}/>)}
+              </div>
+            )}
+          </div>
+        ) : visibleGrps.length === 0 ? (
           <div style={{background:C.card,border:`1px dashed ${C.border}`,borderRadius:10,padding:"40px 20px",textAlign:"center",color:C.muted,fontSize:13,marginBottom:20}}>
             Nenhum ativo em {activeJuris}{activeCat !== "Todos" ? ` · ${activeCat}` : ""}.
           </div>
@@ -1266,8 +1315,10 @@ function App(){
         {/* ── Dívidas e Ônus Reais ──────────────────────────────────────
             Only shown in the "Todos" view since dívidas are a global concept
             that doesn't belong to any specific asset category. Same for the
-            Patrimônio Líquido card below (it's a global summary). */}
-        {activeCat === "Todos" && (() => {
+            Patrimônio Líquido card below (it's a global summary).
+            Also shown in DIRPF-breakdown mode since that view also displays
+            all assets globally. */}
+        {(activeCat === "Todos" || dirpfBreakdown) && (() => {
           const debts = data?.debts || [];
           const totDebts = debts.reduce((a,d)=>a+(d.value||0),0);
           const netWorth = totDIRPF - totDebts;
