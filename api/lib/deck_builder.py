@@ -21244,10 +21244,17 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, sorted_items, total,
         if m and 454 <= int(m.group(2)) <= 500:
             sh.element.getparent().remove(sh.element)
 
-    # NOTE: chrome (PATRIMON.IA, COMPOSIÇÃO PATRIMONIAL lime ribbon, HSA
-    # box top-right, navy footer band with CONFIDENCIAL + page number)
-    # is already present in the template via Picture 2 / Picture 10 /
-    # Text Box62 / Text 7 / Text Box65 / TextBox 13. We do NOT rebuild it.
+    # NOTE: chrome (PATRIMON.IA, HSA box top-right, navy footer band with
+    # CONFIDENCIAL + page number) is already present in the template via
+    # Picture 2 / Picture 10 / Text Box62 / Text Box65 / TextBox 13.
+    # We DO NOT rebuild that chrome.
+    #
+    # BUT — the cleanup loop above wipes the LIME title bar that the outer
+    # build_deck() added at line ~21831 (it lands as auto-named "Rectangle
+    # 481" which falls inside the 454-500 cleanup range). So we re-add the
+    # bar here, AFTER the cleanup, to keep slides 2 and 3 visually consistent
+    # with slides 4/5/6 which also wear the lime title bar.
+    add_title_bar(sl)
     # We DO update the title (Text 7) with the jurisdiction suffix.
     ribbon(sl, f"COMPOSIÇÃO PATRIMONIAL — {jurisdiction.upper()}")
 
