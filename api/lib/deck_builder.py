@@ -19936,10 +19936,20 @@ def aggregate(data):
 
     # Offshore: same logic, summing dcbe.
     off_agg = {}
+    off_countries_by_cat = {}  # category_name → sorted list of unique country strings
     for g in groups:
         if g.get('jurisdiction') == 'Offshore':
             tot = sum((it.get('dcbe') or 0) for it in g['items'])
             off_agg[g['name']] = off_agg.get(g['name'], 0) + tot
+            # Collect every distinct country (loc field) used by items in
+            # this offshore category. Used later by slide 5 to render the
+            # mini flag-row in the bottom-right corner of each offshore box.
+            country_set = set(off_countries_by_cat.get(g['name'], []))
+            for it in g['items']:
+                loc = (it.get('loc') or '').strip()
+                if loc: country_set.add(loc)
+            if country_set:
+                off_countries_by_cat[g['name']] = sorted(country_set)
     off_sorted, off_outros_components = _top6_with_outros(off_agg)
 
     total_br  = sum(v for _, v in br_sorted)
@@ -19960,6 +19970,9 @@ def aggregate(data):
         # "Outros (...)" label → list of underlying category names.
         'br_outros_components':  br_outros_components,
         'off_outros_components': off_outros_components,
+        # category_name → [country, ...] for every offshore category. Drives
+        # the mini flag-row in slide 5's organograma patrimonial.
+        'off_countries_by_cat': off_countries_by_cat,
     }
 
 def brl(v, d=1): return f"R$ {v/1e6:.{d}f}M"
@@ -20442,6 +20455,477 @@ def brazil_flag(sl,cx,cy,w=300_000):
     # blue circle
     cir = int(h*0.40)
     O(sl, cx-cir//2, cy-cir//2, cir, cir, fill=BR_BLUE)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# COUNTRY FLAGS LIBRARY — small simplified shape-drawn flags + fallback chip
+# Used in slide 5 (organograma patrimonial) to identify the country of each
+# offshore asset. Drawn at ~0.22" wide so detail is minimal but the dominant
+# colour and pattern are recognisable.
+# ════════════════════════════════════════════════════════════════════════════
+import unicodedata as _unicodedata
+
+# Free-text country name → ISO 3166 alpha-2 code. Handles Portuguese,
+# English, common abbreviations, and accented variants. The lookup is
+# case-insensitive and strips diacritics.
+_COUNTRY_ALIASES = {
+    # USA
+    'eua': 'US', 'estados unidos': 'US', 'usa': 'US', 'us': 'US',
+    'united states': 'US', 'estados unidos da america': 'US',
+    # United Kingdom
+    'uk': 'GB', 'reino unido': 'GB', 'united kingdom': 'GB', 'gb': 'GB',
+    'inglaterra': 'GB', 'england': 'GB', 'britain': 'GB',
+    # Switzerland
+    'suica': 'CH', 'ch': 'CH', 'switzerland': 'CH', 'schweiz': 'CH', 'suisse': 'CH',
+    # Cayman Islands
+    'cayman': 'KY', 'ilhas cayman': 'KY', 'cayman islands': 'KY', 'ky': 'KY',
+    # Bahamas
+    'bahamas': 'BS', 'bs': 'BS',
+    # Jersey
+    'jersey': 'JE', 'ilhas de jersey': 'JE', 'ilha de jersey': 'JE', 'je': 'JE',
+    # Guernsey
+    'guernsey': 'GG', 'gg': 'GG',
+    # British Virgin Islands
+    'bvi': 'VG', 'british virgin islands': 'VG', 'ilhas virgens britanicas': 'VG',
+    'virgin islands': 'VG', 'vg': 'VG',
+    # Bermuda
+    'bermuda': 'BM', 'bermudas': 'BM', 'bm': 'BM',
+    # Luxembourg
+    'luxemburgo': 'LU', 'luxembourg': 'LU', 'lu': 'LU',
+    # Singapore
+    'cingapura': 'SG', 'singapura': 'SG', 'singapore': 'SG', 'sg': 'SG',
+    # Hong Kong
+    'hong kong': 'HK', 'hk': 'HK', 'hongkong': 'HK',
+    # Monaco
+    'monaco': 'MC', 'monaco': 'MC', 'mc': 'MC',
+    # Germany
+    'alemanha': 'DE', 'germany': 'DE', 'de': 'DE', 'deutschland': 'DE',
+    # France
+    'franca': 'FR', 'france': 'FR', 'fr': 'FR',
+    # Italy
+    'italia': 'IT', 'italy': 'IT', 'it': 'IT',
+    # Spain
+    'espanha': 'ES', 'spain': 'ES', 'es': 'ES',
+    # Portugal
+    'portugal': 'PT', 'pt': 'PT',
+    # Netherlands
+    'holanda': 'NL', 'paises baixos': 'NL', 'netherlands': 'NL', 'nl': 'NL',
+    # Ireland
+    'irlanda': 'IE', 'ireland': 'IE', 'ie': 'IE',
+    # Liechtenstein
+    'liechtenstein': 'LI', 'li': 'LI',
+    # Malta
+    'malta': 'MT', 'mt': 'MT',
+    # Cyprus
+    'chipre': 'CY', 'cyprus': 'CY', 'cy': 'CY',
+    # Japan
+    'japao': 'JP', 'japan': 'JP', 'jp': 'JP',
+    # China
+    'china': 'CN', 'cn': 'CN',
+    # Israel
+    'israel': 'IL', 'il': 'IL',
+    # UAE
+    'emirados arabes unidos': 'AE', 'emirados': 'AE', 'uae': 'AE', 'ae': 'AE',
+    'dubai': 'AE',
+    # Canada
+    'canada': 'CA', 'ca': 'CA',
+    # Australia
+    'australia': 'AU', 'au': 'AU',
+    # Panama
+    'panama': 'PA', 'pa': 'PA',
+    # Uruguay
+    'uruguai': 'UY', 'uruguay': 'UY', 'uy': 'UY',
+    # Argentina
+    'argentina': 'AR', 'ar': 'AR',
+    # Brazil — included so Brasil-tagged offshore items still resolve
+    'brasil': 'BR', 'brazil': 'BR', 'br': 'BR',
+}
+
+def _norm_country_key(s):
+    """Lowercase + strip accents + collapse whitespace."""
+    if not s: return ''
+    k = str(s).lower().strip()
+    k = ''.join(c for c in _unicodedata.normalize('NFD', k)
+                if _unicodedata.category(c) != 'Mn')
+    # collapse repeated whitespace
+    k = ' '.join(k.split())
+    return k
+
+def country_code(name):
+    """Resolve free-text country name to ISO-2 code, or return None."""
+    return _COUNTRY_ALIASES.get(_norm_country_key(name))
+
+
+# ── Flag drawers ────────────────────────────────────────────────────────────
+# Each draws a flag centred at (cx, cy) with width w. Height is w * 0.66
+# (close to the 3:2 international standard). All include a thin GRAY_LT
+# outline so the flag's edges stay visible against any background.
+
+def _flag_box(sl, cx, cy, w, fill_rgb):
+    """Base flag rect with outline. Returns (l, t, w, h)."""
+    h = int(w * 0.66)
+    l = cx - w // 2; t = cy - h // 2
+    sh = sl.shapes.add_shape(_MS.RECTANGLE, Emu(l), Emu(t), Emu(w), Emu(h))
+    sh.fill.solid(); sh.fill.fore_color.rgb = fill_rgb
+    sh.line.color.rgb = GRAY_LT; sh.line.width = Pt(0.4)
+    return l, t, w, h
+
+def _overlay(sl, l, t, w, h, fill_rgb):
+    """Coloured rectangle overlay (no outline) on top of the flag base."""
+    sh = sl.shapes.add_shape(_MS.RECTANGLE, Emu(int(l)), Emu(int(t)), Emu(int(w)), Emu(int(h)))
+    sh.fill.solid(); sh.fill.fore_color.rgb = fill_rgb
+    sh.line.fill.background()
+    return sh
+
+def _overlay_oval(sl, cx, cy, dia, fill_rgb):
+    sh = sl.shapes.add_shape(_MS.OVAL,
+        Emu(int(cx - dia//2)), Emu(int(cy - dia//2)), Emu(int(dia)), Emu(int(dia)))
+    sh.fill.solid(); sh.fill.fore_color.rgb = fill_rgb
+    sh.line.fill.background()
+    return sh
+
+# Color palette for flags
+_RED_USA   = RGBColor(0xBF, 0x0A, 0x30)
+_BLUE_USA  = RGBColor(0x00, 0x2C, 0x77)
+_RED_UK    = RGBColor(0xC8, 0x10, 0x2E)
+_BLUE_UK   = RGBColor(0x01, 0x24, 0x69)
+_RED_CH    = RGBColor(0xD5, 0x2B, 0x1E)
+_BLACK     = RGBColor(0x00, 0x00, 0x00)
+_GOLD_DE   = RGBColor(0xFF, 0xCE, 0x00)
+_RED_DE    = RGBColor(0xDD, 0x00, 0x00)
+_BLUE_FR   = RGBColor(0x00, 0x21, 0x69)
+_RED_FR    = RGBColor(0xED, 0x29, 0x39)
+_GREEN_IT  = RGBColor(0x00, 0x91, 0x46)
+_RED_IT    = RGBColor(0xCE, 0x2B, 0x37)
+_YELLOW_ES = RGBColor(0xFF, 0xC4, 0x00)
+_RED_ES    = RGBColor(0xC6, 0x0B, 0x1E)
+_GREEN_PT  = RGBColor(0x00, 0x69, 0x3E)
+_RED_PT    = RGBColor(0xDA, 0x29, 0x1C)
+_RED_NL    = RGBColor(0xAE, 0x1C, 0x28)
+_BLUE_NL   = RGBColor(0x21, 0x46, 0x8B)
+_RED_JP    = RGBColor(0xBC, 0x00, 0x2D)
+_RED_HK    = RGBColor(0xDE, 0x21, 0x10)
+_RED_CN    = RGBColor(0xDE, 0x29, 0x10)
+_YELLOW_CN = RGBColor(0xFF, 0xDE, 0x00)
+_RED_SG    = RGBColor(0xEF, 0x37, 0x40)
+_BLUE_LU   = RGBColor(0x00, 0xA1, 0xDE)
+_RED_LU    = RGBColor(0xED, 0x29, 0x39)
+_BLUE_IL   = RGBColor(0x00, 0x38, 0xB8)
+_GREEN_AE  = RGBColor(0x00, 0x73, 0x2F)
+_RED_AE    = RGBColor(0xFF, 0x00, 0x00)
+_RED_CA    = RGBColor(0xD8, 0x05, 0x21)
+_BLUE_AU   = RGBColor(0x01, 0x21, 0x69)
+_RED_BR_BAHAMAS = RGBColor(0xFE, 0xDE, 0x00)
+_BLACK_BS  = RGBColor(0x00, 0x00, 0x00)
+_BLUE_BS   = RGBColor(0x00, 0x77, 0x83)
+_BLUE_BVI  = RGBColor(0x01, 0x24, 0x69)
+_BLUE_KY   = RGBColor(0x01, 0x24, 0x69)
+_BLUE_BM   = RGBColor(0xCE, 0x11, 0x26)  # Bermuda — red base
+_RED_LI    = RGBColor(0xC8, 0x10, 0x2E)
+_BLUE_LI   = RGBColor(0x00, 0x2C, 0x66)
+_RED_MT    = RGBColor(0xCF, 0x14, 0x2B)
+_BLUE_MC   = RGBColor(0xCE, 0x11, 0x26)  # Monaco — red+white actually
+_RED_MC    = RGBColor(0xCE, 0x11, 0x26)
+_BLUE_PA   = RGBColor(0x00, 0x52, 0xB4)
+_RED_PA    = RGBColor(0xD2, 0x10, 0x34)
+_BLUE_UY   = RGBColor(0x00, 0x6E, 0xC7)
+_BLUE_AR   = RGBColor(0x6C, 0xAC, 0xE4)
+_GOLD_AR   = RGBColor(0xF6, 0xB7, 0x0E)
+
+def _flag_us(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, WHITE)
+    # 3 red stripes (simplified — the real flag has 7 stripes but at this
+    # size 3 reads as "horizontal stripes" without becoming a blur)
+    stripe_h = h // 6
+    for k in range(3):
+        _overlay(sl, l, t + k*2*stripe_h + stripe_h, w, stripe_h, _RED_USA)
+    # Blue canton, top-left
+    _overlay(sl, l, t, int(w*0.4), int(h*0.55), _BLUE_USA)
+
+def _flag_gb(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, _BLUE_UK)
+    # White cross (St Andrew's + St Patrick's diagonals approximated by
+    # white horizontal+vertical, then red cross on top — simplified)
+    _overlay(sl, l, t + h//2 - h//12, w, h//6, WHITE)
+    _overlay(sl, l + w//2 - w//12, t, w//6, h, WHITE)
+    # Red cross (St George)
+    _overlay(sl, l, t + h//2 - h//20, w, h//10, _RED_UK)
+    _overlay(sl, l + w//2 - w//20, t, w//10, h, _RED_UK)
+
+def _flag_ch(sl, cx, cy, w):
+    # Switzerland is square, but we keep the 2:3 box outline + render the
+    # red square centred so the flag's character (red w/ white plus) reads.
+    l, t, w, h = _flag_box(sl, cx, cy, w, _RED_CH)
+    # White plus — horizontal arm + vertical arm
+    arm_w = int(w * 0.55); arm_t = h // 5
+    _overlay(sl, cx - arm_w//2, cy - arm_t//2, arm_w, arm_t, WHITE)
+    _overlay(sl, cx - arm_t//2, cy - arm_w//2, arm_t, arm_w, WHITE)
+
+def _flag_de(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, _BLACK)
+    band = h // 3
+    _overlay(sl, l, t + band,     w, band, _RED_DE)
+    _overlay(sl, l, t + 2*band,   w, band, _GOLD_DE)
+
+def _flag_fr(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, _BLUE_FR)
+    col = w // 3
+    _overlay(sl, l + col,     t, col, h, WHITE)
+    _overlay(sl, l + 2*col,   t, col, h, _RED_FR)
+
+def _flag_it(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, _GREEN_IT)
+    col = w // 3
+    _overlay(sl, l + col,     t, col, h, WHITE)
+    _overlay(sl, l + 2*col,   t, col, h, _RED_IT)
+
+def _flag_es(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, _RED_ES)
+    _overlay(sl, l, t + h//4, w, h//2, _YELLOW_ES)
+
+def _flag_pt(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, _RED_PT)
+    _overlay(sl, l, t, int(w*0.4), h, _GREEN_PT)
+
+def _flag_nl(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, _RED_NL)
+    _overlay(sl, l, t + h//3, w, h//3, WHITE)
+    _overlay(sl, l, t + 2*(h//3), w, h - 2*(h//3), _BLUE_NL)
+
+def _flag_jp(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, WHITE)
+    dia = int(h * 0.60)
+    _overlay_oval(sl, cx, cy, dia, _RED_JP)
+
+def _flag_cn(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, _RED_CN)
+    # Big yellow star (simplified as oval, top-left)
+    sx, sy = l + int(w * 0.22), t + int(h * 0.32)
+    dia = int(h * 0.35)
+    _overlay_oval(sl, sx, sy, dia, _YELLOW_CN)
+
+def _flag_sg(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, _RED_SG)
+    _overlay(sl, l, t + h//2, w, h - h//2, WHITE)
+
+def _flag_hk(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, _RED_HK)
+    # White flower (simplified to a small white oval)
+    _overlay_oval(sl, cx, cy, int(h * 0.50), WHITE)
+
+def _flag_lu(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, _RED_LU)
+    _overlay(sl, l, t + h//3, w, h//3, WHITE)
+    _overlay(sl, l, t + 2*(h//3), w, h - 2*(h//3), _BLUE_LU)
+
+def _flag_il(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, WHITE)
+    # Two blue stripes
+    _overlay(sl, l, t + int(h*0.12), w, int(h*0.18), _BLUE_IL)
+    _overlay(sl, l, t + int(h*0.70), w, int(h*0.18), _BLUE_IL)
+
+def _flag_ae(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, WHITE)
+    band = h // 3
+    _overlay(sl, l, t,           w, band, _GREEN_AE)
+    _overlay(sl, l, t + 2*band,  w, band, _BLACK)
+    _overlay(sl, l, t,    int(w*0.25), h, _RED_AE)
+
+def _flag_ca(sl, cx, cy, w):
+    l, t, w, h = _flag_box(sl, cx, cy, w, WHITE)
+    side = int(w * 0.25)
+    _overlay(sl, l,            t, side, h, _RED_CA)
+    _overlay(sl, l + w - side, t, side, h, _RED_CA)
+
+def _flag_au(sl, cx, cy, w):
+    # Approximation: blue base + small Union Jack in canton + a few stars
+    l, t, w, h = _flag_box(sl, cx, cy, w, _BLUE_AU)
+    # Mini Union Jack in top-left quadrant
+    can_w = int(w * 0.45); can_h = int(h * 0.50)
+    _overlay(sl, l, t, can_w, can_h, _BLUE_UK)
+    _overlay(sl, l, t + can_h//2 - can_h//12, can_w, can_h//6, WHITE)
+    _overlay(sl, l + can_w//2 - can_w//12, t, can_w//6, can_h, WHITE)
+    _overlay(sl, l, t + can_h//2 - can_h//20, can_w, can_h//10, _RED_UK)
+    _overlay(sl, l + can_w//2 - can_w//20, t, can_w//10, can_h, _RED_UK)
+
+def _flag_ky(sl, cx, cy, w):
+    # Cayman: blue ensign — simplified to blue base + mini UJ in canton
+    l, t, w, h = _flag_box(sl, cx, cy, w, _BLUE_KY)
+    can_w = int(w * 0.45); can_h = int(h * 0.50)
+    _overlay(sl, l, t, can_w, can_h, _BLUE_UK)
+    _overlay(sl, l, t + can_h//2 - can_h//12, can_w, can_h//6, WHITE)
+    _overlay(sl, l + can_w//2 - can_w//12, t, can_w//6, can_h, WHITE)
+    _overlay(sl, l, t + can_h//2 - can_h//20, can_w, can_h//10, _RED_UK)
+    _overlay(sl, l + can_w//2 - can_w//20, t, can_w//10, can_h, _RED_UK)
+
+def _flag_bs(sl, cx, cy, w):
+    # Bahamas: 3 horizontal bands (aquamarine/yellow/aquamarine) + black triangle on left
+    l, t, w, h = _flag_box(sl, cx, cy, w, _BLUE_BS)
+    _overlay(sl, l, t + h//3, w, h//3, _RED_BR_BAHAMAS)  # yellow middle
+    # Black left triangle approximated as a small filled triangle via MSO_SHAPE
+    tri = sl.shapes.add_shape(_MS.RIGHT_TRIANGLE,
+            Emu(l), Emu(t), Emu(int(w*0.30)), Emu(h))
+    tri.fill.solid(); tri.fill.fore_color.rgb = _BLACK_BS
+    tri.line.fill.background()
+    tri.rotation = 270  # point right
+
+def _flag_vg(sl, cx, cy, w):
+    # BVI: blue ensign — same simplified style as Cayman
+    _flag_ky(sl, cx, cy, w)
+
+def _flag_bm(sl, cx, cy, w):
+    # Bermuda: red ensign — red base + mini UJ in canton
+    l, t, w, h = _flag_box(sl, cx, cy, w, _BLUE_BM)
+    can_w = int(w * 0.45); can_h = int(h * 0.50)
+    _overlay(sl, l, t, can_w, can_h, _BLUE_UK)
+    _overlay(sl, l, t + can_h//2 - can_h//12, can_w, can_h//6, WHITE)
+    _overlay(sl, l + can_w//2 - can_w//12, t, can_w//6, can_h, WHITE)
+
+def _flag_je(sl, cx, cy, w):
+    # Jersey: white with red saltire (X) — approximated with 2 diagonal bars
+    # would need rotation; simplified to white + red corner triangles
+    l, t, w, h = _flag_box(sl, cx, cy, w, WHITE)
+    # Red diagonal cross approximated by 4 corner triangles
+    for rot, dx, dy in [(0, l, t), (90, l + w, t), (180, l + w, t + h), (270, l, t + h)]:
+        pass  # simplification: just draw a small red plus in the center
+    _overlay(sl, cx - w//5, t, int(w*0.4), h, _RED_UK)
+    _overlay(sl, l, cy - h//5, w, int(h*0.4), _RED_UK)
+
+def _flag_gg(sl, cx, cy, w):
+    # Guernsey: white with red cross
+    l, t, w, h = _flag_box(sl, cx, cy, w, WHITE)
+    _overlay(sl, cx - int(w*0.08), t, int(w*0.16), h, _RED_UK)
+    _overlay(sl, l, cy - int(h*0.08), w, int(h*0.16), _RED_UK)
+
+def _flag_mc(sl, cx, cy, w):
+    # Monaco: red over white
+    l, t, w, h = _flag_box(sl, cx, cy, w, _RED_MC)
+    _overlay(sl, l, t + h//2, w, h - h//2, WHITE)
+
+def _flag_li(sl, cx, cy, w):
+    # Liechtenstein: blue over red
+    l, t, w, h = _flag_box(sl, cx, cy, w, _BLUE_LI)
+    _overlay(sl, l, t + h//2, w, h - h//2, _RED_LI)
+
+def _flag_mt(sl, cx, cy, w):
+    # Malta: white | red (vertical)
+    l, t, w, h = _flag_box(sl, cx, cy, w, WHITE)
+    _overlay(sl, l + w//2, t, w - w//2, h, _RED_MT)
+
+def _flag_cy(sl, cx, cy, w):
+    # Cyprus: white base (simplified — has orange map + olive branches)
+    l, t, w, h = _flag_box(sl, cx, cy, w, WHITE)
+    _overlay_oval(sl, cx, cy, int(h*0.45), _GOLD_DE)  # gold-ish island silhouette
+
+def _flag_ie(sl, cx, cy, w):
+    # Ireland: green | white | orange (vertical)
+    l, t, w, h = _flag_box(sl, cx, cy, w, _GREEN_PT)
+    col = w // 3
+    _overlay(sl, l + col,     t, col, h, WHITE)
+    _overlay(sl, l + 2*col,   t, col, h, RGBColor(0xFF, 0x88, 0x3E))
+
+def _flag_pa(sl, cx, cy, w):
+    # Panama: 4 quadrants (white/red top, blue/white bottom — simplified to a 2x2 grid)
+    l, t, w, h = _flag_box(sl, cx, cy, w, WHITE)
+    _overlay(sl, l + w//2, t,        w - w//2, h//2, _RED_PA)
+    _overlay(sl, l,        t + h//2, w//2, h - h//2, _BLUE_PA)
+
+def _flag_uy(sl, cx, cy, w):
+    # Uruguay: 4 blue stripes + sun (simplified)
+    l, t, w, h = _flag_box(sl, cx, cy, w, WHITE)
+    stripe = h // 9
+    for k in (1, 3, 5, 7):
+        _overlay(sl, l + int(w*0.33), t + k*stripe, w - int(w*0.33), stripe, _BLUE_UY)
+    _overlay_oval(sl, l + int(w*0.17), t + int(h*0.25), int(h*0.30), _GOLD_DE)
+
+def _flag_ar(sl, cx, cy, w):
+    # Argentina: light blue / white / light blue (horizontal)
+    l, t, w, h = _flag_box(sl, cx, cy, w, _BLUE_AR)
+    _overlay(sl, l, t + h//3, w, h//3, WHITE)
+    _overlay_oval(sl, cx, cy, int(h*0.25), _GOLD_AR)  # sun
+
+def _flag_br(sl, cx, cy, w):
+    # Reuse the existing brazil_flag (h=0.7*w). Wrap to match signature.
+    brazil_flag(sl, cx, cy, w=w)
+
+def _flag_chip(sl, cx, cy, w, code):
+    """Fallback when no per-country drawer exists. Renders the ISO-2 code
+    (or 2-char abbreviation) in a navy chip with white bold text."""
+    h = int(w * 0.66)
+    l = cx - w // 2; t = cy - h // 2
+    sh = sl.shapes.add_shape(_MS.RECTANGLE, Emu(l), Emu(t), Emu(w), Emu(h))
+    sh.fill.solid(); sh.fill.fore_color.rgb = NAVY
+    sh.line.color.rgb = GRAY_LT; sh.line.width = Pt(0.4)
+    tf = sh.text_frame
+    tf.margin_left = tf.margin_right = tf.margin_top = tf.margin_bottom = 0
+    tf.word_wrap = False
+    from pptx.enum.text import PP_ALIGN as _PA, MSO_ANCHOR as _MA
+    tf.vertical_anchor = _MA.MIDDLE
+    p = tf.paragraphs[0]; p.alignment = _PA.CENTER
+    r = p.add_run(); r.text = code
+    r.font.name = "Gotham SSm Bold"; r.font.size = Pt(6); r.font.bold = True
+    r.font.color.rgb = WHITE
+
+_FLAG_DRAWERS = {
+    'US': _flag_us, 'GB': _flag_gb, 'CH': _flag_ch, 'DE': _flag_de,
+    'FR': _flag_fr, 'IT': _flag_it, 'ES': _flag_es, 'PT': _flag_pt,
+    'NL': _flag_nl, 'JP': _flag_jp, 'CN': _flag_cn, 'SG': _flag_sg,
+    'HK': _flag_hk, 'LU': _flag_lu, 'IL': _flag_il, 'AE': _flag_ae,
+    'CA': _flag_ca, 'AU': _flag_au, 'KY': _flag_ky, 'BS': _flag_bs,
+    'VG': _flag_vg, 'BM': _flag_bm, 'JE': _flag_je, 'GG': _flag_gg,
+    'MC': _flag_mc, 'LI': _flag_li, 'MT': _flag_mt, 'CY': _flag_cy,
+    'IE': _flag_ie, 'PA': _flag_pa, 'UY': _flag_uy, 'AR': _flag_ar,
+    'BR': _flag_br,
+}
+
+def draw_country_flag(sl, cx, cy, w, country_name):
+    """Dispatch: resolve country name to ISO code, draw the right flag.
+    Falls back to a navy chip with the 2-char hint of the country name
+    (or its ISO code if recognised but no drawer exists)."""
+    code = country_code(country_name)
+    if code and code in _FLAG_DRAWERS:
+        _FLAG_DRAWERS[code](sl, cx, cy, w)
+    else:
+        # Fallback chip — try the resolved ISO-2 first, else first 2 chars
+        # of the original country name (uppercased).
+        hint = code or (country_name or '?').strip()[:2].upper()
+        _flag_chip(sl, cx, cy, w, hint)
+
+def draw_country_flags_row(sl, right_x, bottom_y, w_each, countries, gap_emu=40_000):
+    """Lay out up to N country flags in a row, right-anchored at right_x and
+    bottom-anchored at bottom_y. If more than `max_visible` countries, the
+    last visible slot becomes a "+N" navy chip indicating how many more.
+
+    Used by slide 5 to mark which countries an offshore category covers."""
+    if not countries:
+        return
+    countries = list(countries)
+    h_each = int(w_each * 0.66)
+    max_visible = 4
+    if len(countries) > max_visible:
+        # Show the first max_visible-1 flags + a "+N" overflow chip
+        visible = countries[:max_visible - 1]
+        overflow = len(countries) - (max_visible - 1)
+        # Render visible flags right-to-left from the right edge so the
+        # leftmost flag in the visible group sits inside the box.
+        total = max_visible
+    else:
+        visible = countries
+        overflow = 0
+        total = len(visible)
+    # Compute right-most flag centre, then walk left for each subsequent
+    # flag. Bottom-anchored: each flag's bottom edge sits at bottom_y.
+    cy = bottom_y - h_each // 2
+    cx = right_x - w_each // 2
+    # Draw overflow chip first (rightmost) if needed, else last visible flag
+    if overflow > 0:
+        _flag_chip(sl, cx, cy, w_each, f"+{overflow}")
+        cx -= w_each + gap_emu
+    # Visible flags, right-to-left
+    for country in reversed(visible):
+        draw_country_flag(sl, cx, cy, w_each, country)
+        cx -= w_each + gap_emu
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # ASSET ICONS — simple monochrome vector icons drawn from MSO primitives.
@@ -22319,20 +22803,13 @@ def build_deck(data, output_path):
     # ─── TOP CLUSTER: Offshore (rendered first, at the top of the slide) ───
     TOP_Y = CT + 30_000  # just below the title ribbon
     if off:
-        # OFFSHORE label box (navy block with white text)
-        OBW = 2_700_000
-        OBH = 360_000
-        OBX = CX5 - OBW//2
-        OBY = TOP_Y
-        R(s5, OBX, OBY, OBW, OBH, fill=NAVY)
-        T(s5, "OFFSHORE", OBX, OBY, OBW, OBH,
-          pt=13, bold=True, col=WHITE, align='center', font='Gotham SSm Bold')
+        # No more "OFFSHORE" navy header label — the country flags inside each
+        # offshore box (drawn below) already communicate where each asset is
+        # located, so the explicit text label is redundant chrome that clutters
+        # the slide. Offshore boxes start directly under the title ribbon.
+        OHDIST = TOP_Y + 130_000  # vertical drop position for the distributor
 
-        # Vertical drop + horizontal distributor below the OFFSHORE box
-        OHDIST = OBY + OBH + 110_000
-        L(s5, CX5, OBY+OBH, CX5, OHDIST)
-
-        # Offshore asset boxes laid out in a row directly under the label
+        # Offshore asset boxes laid out in a row directly under the title ribbon
         n_off = len(off)
         OW = min(3_500_000, (SW-1_000_000)//n_off - 130_000)
         OG = 150_000
@@ -22340,6 +22817,13 @@ def build_deck(data, output_path):
         OS  = (SW - TOW)//2
         ORT = OHDIST + 55_000
         L(s5, OS+OW//2, OHDIST, OS+TOW-OW//2, OHDIST)
+        # Pull the per-category country list extracted by aggregate(). For
+        # each offshore box we render the flags of every distinct country
+        # the underlying items declare in their `loc` field. Falls back to
+        # a navy chip with a 2-char country hint for unrecognised countries
+        # — so the output works for any country, any client.
+        off_countries_by_cat = agg.get('off_countries_by_cat', {})
+        off_outros_components = agg.get('off_outros_components', {})
         for i, (name, val) in enumerate(off):
             ox = OS + i*(OW+OG); oy = ORT
             L(s5, ox+OW//2, OHDIST, ox+OW//2, oy)
@@ -22351,7 +22835,22 @@ def build_deck(data, output_path):
             vstr = usd(val) if val > 0 else 'N/D'
             T(s5, vstr, ox+60_000, oy+650_000, OW-120_000, fh(13),
               pt=13, bold=True, col=NAVY, align='center', font='Gotham SSm Bold')
-            icon_globe(s5, ox + OW - 130_000, oy + BH - 90_000, sz=170_000, col=NAVY)
+            # Country flags at bottom-right. "Outros (...)" buckets pool the
+            # countries of every bundled category so the user still sees
+            # the geographic footprint behind the aggregate.
+            countries = list(off_countries_by_cat.get(name, []))
+            if not countries and name in off_outros_components:
+                pooled = set()
+                for comp_name in off_outros_components[name]:
+                    pooled.update(off_countries_by_cat.get(comp_name, []))
+                countries = sorted(pooled)
+            draw_country_flags_row(
+                s5,
+                right_x  = ox + OW - 70_000,   # ~0.08" from box right edge
+                bottom_y = oy + BH - 60_000,   # ~0.07" from box bottom
+                w_each   = 200_000,            # ~0.22" wide per flag
+                countries = countries,
+            )
         OFF_BOTTOM = ORT + BH
     else:
         OFF_BOTTOM = TOP_Y  # no offshore — person starts higher
@@ -22371,17 +22870,17 @@ def build_deck(data, output_path):
         L(s5, CX5, OFF_BOTTOM, CX5, NAME_Y - 30_000)
 
     # ─── BOTTOM CLUSTER: Brazilian assets ───
-    # Drop from person → BR flag hub
+    # Drop from person → BR flag hub. The flag itself communicates "Brasil"
+    # (matching the country-flag treatment we now use for offshore boxes),
+    # so the explicit "ATIVOS NO BRASIL" caption is dropped — same chrome
+    # reduction as the OFFSHORE label above.
     FLAG_CY = PB + 230_000
     L(s5, CX5, PB+30_000, CX5, FLAG_CY - 105_000)
     brazil_flag(s5, CX5, FLAG_CY, w=300_000)
 
-    LABEL_Y = FLAG_CY + 145_000
-    T(s5, "ATIVOS NO BRASIL", CX5-1_500_000, LABEL_Y, 3_000_000, fh(7),
-      pt=7, bold=True, col=GRAY_MED, align='center', font='Gotham SSm Bold')
-
-    # Horizontal distributor + BR asset boxes
-    HDIST_Y = LABEL_Y + fh(7) + 45_000
+    # Horizontal distributor + BR asset boxes (vertical drop shortened
+    # since the caption that used to live here is gone).
+    HDIST_Y = FLAG_CY + 180_000
     L(s5, CX5, FLAG_CY+90_000, CX5, HDIST_Y)
 
     br_items = br[:5] if br else []
