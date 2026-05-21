@@ -21157,6 +21157,25 @@ CATEGORY_STRATEGIES = {
     "Outros (Previdência, Cripto, Equity)": [
         ("Beneficiários em previdência privada (VGBL/PGBL)", "sucessorio"),
     ],
+    # ── OFFSHORE / EXTERIOR variants ──────────────────────────────────────
+    # Strategies tied to capital held outside Brazil require international
+    # structures (LLC, Trusts, Pour-Over Wills, etc.) distinct from those
+    # used for Brazilian assets.
+    "Participações Societárias no Exterior": [
+        ("Holding Offshore (LLC / Trust)", "patrimonial"),
+        ("Acordo de Acionistas Internacional", "sucessorio"),
+    ],
+    "Aplicações no Exterior": [
+        ("Private Banking Internacional / Mandato", "patrimonial"),
+        ("Beneficiários (Designation of Beneficiary)", "sucessorio"),
+    ],
+    "Bens Imóveis no Exterior": [
+        ("Holding Offshore (LLC / Trust)", "patrimonial"),
+        ("Testamento Internacional / Pour-Over Will", "sucessorio"),
+    ],
+    "Contas Bancárias no Exterior": [
+        ("POD / TOD Designation", "sucessorio"),
+    ],
 }
 
 
