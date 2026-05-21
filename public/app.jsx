@@ -913,6 +913,29 @@ function App(){
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
+  // ── DIRPF-Offshore BRL value with PTAX fallback ───────────────────────────
+  // The DIRPF declares global assets in BRL — but test PDFs (or DIRPFs filled
+  // before the offshore part) may have offshore items only in the DCBE (USD).
+  // For those items, we estimate the BRL value as `dcbe * ptaxRate`. We track
+  // whether ANY item used the PTAX fallback so the UI can show a "(estimado)"
+  // hint instead of the user wondering where the number came from.
+  const offshoreUsedPtaxFallback = offGrps.some(g => g.items.some(i => !((i.dirpf||0)>0) && (i.dcbe||0)>0));
+  const totDIRPFOffshoreEstimated = offGrps.reduce((a,g)=>a+g.items.reduce((b,i)=>{
+    const d = i.dirpf || 0;
+    if (d > 0) return b + d;                        // use declared DIRPF when present
+    const u = i.dcbe || 0;
+    if (u > 0 && ptaxRate) return b + (u * ptaxRate); // else convert USD via PTAX
+    return b;
+  },0),0);
+
+  // Auto-fetch PTAX when user opens the DIRPF breakdown and needs the conversion
+  useEffect(()=>{
+    if (dirpfBreakdown && offshoreUsedPtaxFallback && !ptaxRate && !ptaxLoading) {
+      fetchPtax();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dirpfBreakdown]);
+
   const activeGrps = activeJuris === "Brasil" ? brGrps : offGrps;
   // While dragging, show ALL groups so the user can drop on any target
   const visibleGrps = dragSource
@@ -1035,7 +1058,19 @@ function App(){
               <p style={{color:C.muted,fontSize:9,fontWeight:700,letterSpacing:"0.15em",marginBottom:6}}>{label}{interactive&&<span style={{marginLeft:6,color:active?C.gold:C.dim,fontSize:10}}>{active?"▲":"▼"}</span>}</p>
               <p style={{fontFamily:"'Cormorant Garamond',serif",fontSize:20,fontWeight:600,color:accent}}>{value}</p>
               {interactive&&!active&&<p style={{color:C.dim,fontSize:9,marginTop:3,fontStyle:"italic"}}>{hint}</p>}
-              {interactive&&active&&<p style={{color:C.gold,fontSize:9,marginTop:3,fontWeight:700,letterSpacing:"0.05em"}}>BR {brl(totDIRPFBrasil)} · OFF {brl(totDIRPFOffshore)}</p>}
+              {interactive&&active&&(
+                <div style={{marginTop:3}}>
+                  <p style={{color:C.gold,fontSize:9,fontWeight:700,letterSpacing:"0.05em"}}>
+                    BR {brl(totDIRPFBrasil)} · OFF {totDIRPFOffshoreEstimated>0?brl(totDIRPFOffshoreEstimated):"R$ 0,00"}{offshoreUsedPtaxFallback && ptaxRate?<span style={{color:C.muted,fontWeight:400,marginLeft:3}}> (≈ PTAX)</span>:null}
+                  </p>
+                  {offshoreUsedPtaxFallback && !ptaxRate && !ptaxLoading && (
+                    <p style={{color:C.red,fontSize:9,marginTop:2,fontStyle:"italic"}}>⚠ DIRPF deste cliente não declarou ativos offshore — busque a PTAX abaixo para estimar o OFF em R$.</p>
+                  )}
+                  {ptaxLoading && (
+                    <p style={{color:C.muted,fontSize:9,marginTop:2,fontStyle:"italic"}}>buscando PTAX...</p>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -1206,6 +1241,33 @@ function App(){
                 </button>
               );
             })}
+            {/* Standalone "Dívidas" chip — clicking filters the screen to
+                show only the debts table (no asset categories). Always
+                rendered (even when there are 0 debts) so the user can
+                navigate to it and add a new one. Distinct red accent so
+                it doesn't get confused with an asset category chip. */}
+            {(() => {
+              const nDebts = data?.debts?.length || 0;
+              const isActive = activeCat === "Dívidas";
+              return (
+                <button key="cat-dividas"
+                  onClick={()=>setActiveCat("Dívidas")}
+                  title="Ver apenas dívidas e ônus reais (Ficha 8 DIRPF)"
+                  style={{
+                    background: isActive ? C.red : C.card,
+                    color: isActive ? "#fff" : C.red,
+                    border: `1px solid ${isActive ? C.red : "rgba(224,82,82,.35)"}`,
+                    borderRadius: 999,
+                    padding: "7px 14px",
+                    cursor: "pointer",
+                    fontFamily: "'Nunito Sans',sans-serif",
+                    fontSize: 12,
+                    fontWeight: isActive ? 700 : 600,
+                  }}>
+                  Dívidas <span style={{opacity:isActive?0.7:0.55,marginLeft:4,fontSize:10}}>{nDebts}</span>
+                </button>
+              );
+            })()}
             {/* Ghost chips for the 3 supplemental categories that the AI
                 rarely extracts (Cripto / Previdência / Equity) — always
                 visible when missing so the user can create them with one
@@ -1271,8 +1333,10 @@ function App(){
 
         {/* Asset list — default = filtered by activeJuris + activeCat;
             DIRPF-breakdown = both jurisdictions stacked with prominent headers
-            showing the DIRPF total (in BRL) of each. */}
-        {dirpfBreakdown ? (
+            showing the DIRPF total (in BRL) of each.
+            Hidden entirely when the user clicks the standalone "Dívidas" chip
+            (activeCat === "Dívidas") so the screen focuses on the debts table. */}
+        {activeCat === "Dívidas" ? null : dirpfBreakdown ? (
           <div style={{marginBottom:20}}>
             {brGrps.length > 0 && (
               <div style={{marginBottom:18}}>
@@ -1290,13 +1354,15 @@ function App(){
             {offGrps.length > 0 && (
               <div style={{marginBottom:18}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,padding:"14px 20px",background:"rgba(191,148,71,.06)",border:`1.5px solid ${C.gold}`,borderRadius:10}}>
-                  <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
                     <span style={{color:C.gold,fontWeight:700,fontSize:24,fontFamily:"'Cormorant Garamond',serif",fontStyle:"italic",lineHeight:1}}>2)</span>
                     <span style={{color:C.text,fontWeight:700,fontSize:13,letterSpacing:"0.12em"}}>ATIVOS OFFSHORE</span>
                     <span style={{background:"rgba(191,148,71,.15)",color:C.gold,fontSize:10,padding:"2px 8px",borderRadius:20,fontWeight:700}}>{offGrps.reduce((a,g)=>a+g.items.length,0)} {offGrps.reduce((a,g)=>a+g.items.length,0)===1?"item":"itens"}</span>
-                    <span style={{color:C.muted,fontSize:9,fontStyle:"italic"}}>valores em BRL conforme DIRPF</span>
+                    {offshoreUsedPtaxFallback && ptaxRate && <span style={{color:C.muted,fontSize:9,fontStyle:"italic"}}>valores estimados via PTAX {ptaxRate.toFixed(4)} de {ptaxDate}</span>}
+                    {offshoreUsedPtaxFallback && !ptaxRate && <span style={{color:C.red,fontSize:9,fontStyle:"italic"}}>⚠ DIRPF sem declaração offshore — busque a PTAX para converter</span>}
+                    {!offshoreUsedPtaxFallback && <span style={{color:C.muted,fontSize:9,fontStyle:"italic"}}>valores em BRL conforme DIRPF</span>}
                   </div>
-                  <span style={{color:C.text,fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:700}}>{brl(totDIRPFOffshore)}</span>
+                  <span style={{color:C.text,fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:700}}>{totDIRPFOffshoreEstimated>0?brl(totDIRPFOffshoreEstimated):"R$ 0,00"}</span>
                 </div>
                 {offGrps.map(g=><GroupTable key={g.name+g.jurisdiction} group={g} onUpdate={updateItem} onAddItem={addItemToGroup} dragSource={dragSource} setDragSource={setDragSource} onMoveItem={moveItem}/>)}
               </div>
@@ -1313,12 +1379,12 @@ function App(){
         )}
 
         {/* ── Dívidas e Ônus Reais ──────────────────────────────────────
-            Only shown in the "Todos" view since dívidas are a global concept
-            that doesn't belong to any specific asset category. Same for the
-            Patrimônio Líquido card below (it's a global summary).
-            Also shown in DIRPF-breakdown mode since that view also displays
-            all assets globally. */}
-        {(activeCat === "Todos" || dirpfBreakdown) && (() => {
+            Shown in: (a) the "Todos" view, since dívidas are a global concept
+            that doesn't belong to any specific asset category; (b) DIRPF-
+            breakdown mode, which also displays all assets globally; (c) when
+            the standalone "Dívidas" chip is clicked — in that case the
+            asset list above is hidden and this section IS the screen. */}
+        {(activeCat === "Todos" || activeCat === "Dívidas" || dirpfBreakdown) && (() => {
           const debts = data?.debts || [];
           const totDebts = debts.reduce((a,d)=>a+(d.value||0),0);
           const netWorth = totDIRPF - totDebts;
