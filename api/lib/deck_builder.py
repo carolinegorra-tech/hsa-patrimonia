@@ -21168,18 +21168,31 @@ def short_strategy(s, max_len=42):
     return s
 
 
-def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
+def _draw_redesigned_slide2(sl, prs_w, prs_h, sorted_items, total,
                             indice_p, indice_s, strategy_slides,
-                            outros_components=None):
-    """Draw the redesigned slide 2: donut centered + 6 callouts around with
-    category name, value, percentage, and 0–2 strategy hyperlinks each.
-    Two big bottom buttons link to the Patrimonial / Sucessório indices.
+                            outros_components=None,
+                            jurisdiction='Brasil'):
+    """Draw the redesigned slide 2 (or 3): donut centered + up to 6 callouts
+    around it with category name, value, percentage, and 0–2 strategy
+    hyperlinks each. Two big bottom buttons link to the Patrimonial /
+    Sucessório indices.
 
+    `sorted_items`: list of (category_name, value) tuples from aggregate().
+    `total`: sum of all values (used to compute slice percentages).
     `outros_components` is an optional dict mapping an "Outros (...)" label
     to the list of categories bundled inside it; used to aggregate
     strategies for the Outros callout so its hyperlinks reflect the real
-    bundled categories instead of being empty."""
+    bundled categories instead of being empty.
+    `jurisdiction`: 'Brasil' or 'Exterior'. Controls the title suffix
+    appended to "COMPOSIÇÃO PATRIMONIAL" and triggers the empty-state
+    placeholder ('Sem patrimônio no exterior declarado.') when total==0
+    (only meaningful for Exterior since BR data is never empty in the
+    DIRPF-driven workflow)."""
     outros_components = outros_components or {}
+    # Keep legacy local names so the rest of the function (which references
+    # br_sorted/total_br extensively) doesn't need a sweeping refactor.
+    br_sorted = sorted_items
+    total_br  = total
     from pptx.util import Inches, Emu, Pt
     from pptx.enum.shapes import MSO_SHAPE
     from pptx.enum.text import PP_ALIGN
@@ -21206,13 +21219,37 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
             sh.element.getparent().remove(sh.element)
             continue
         m = _DATA_RE.match(sh.name or '')
-        if m and 454 <= int(m.group(2)) <= 480:
+        # Range covers BOTH slide-2 (454-480) AND slide-3 (454-486) data
+        # shape ranges, since this builder now runs on both as Brasil and
+        # Exterior composition slides respectively.
+        if m and 454 <= int(m.group(2)) <= 500:
             sh.element.getparent().remove(sh.element)
 
     # NOTE: chrome (PATRIMON.IA, COMPOSIÇÃO PATRIMONIAL lime ribbon, HSA
     # box top-right, navy footer band with CONFIDENCIAL + page number)
     # is already present in the template via Picture 2 / Picture 10 /
     # Text Box62 / Text 7 / Text Box65 / TextBox 13. We do NOT rebuild it.
+    # We DO update the title (Text 7) with the jurisdiction suffix.
+    ribbon(sl, f"COMPOSIÇÃO PATRIMONIAL — {jurisdiction.upper()}")
+
+    from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE
+    # Empty-state: client has no offshore patrimony to display. Render
+    # a centered italic message instead of the donut/callout layout.
+    if total_br == 0:
+        msg = sl.shapes.add_textbox(
+            Inches(1.5), Inches(3.0), prs_w - Inches(3.0), Inches(1.5)
+        )
+        mtf = msg.text_frame
+        mtf.word_wrap = True
+        mtf.vertical_anchor = MSO_ANCHOR.MIDDLE
+        p = mtf.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
+        r = p.add_run()
+        r.text = "Sem patrimônio no exterior declarado."
+        r.font.name = "Gotham SSm"
+        r.font.size = Pt(18)
+        r.font.color.rgb = GRAY_MED
+        r.font.italic = True
+        return
 
     # ── LAYOUT: pie centred, 6 callout slots in 6 angular zones around it.
     # Each callout has a colour-square + name + value + %. Leader from
@@ -21220,7 +21257,6 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
     # callout anchor (kept entirely outside the pie). Arrowhead on the
     # callout end so direction is obvious.
     import math as _math
-    from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE
     from pptx.oxml.ns import qn as _qn
     from lxml import etree as _etree
 
@@ -21540,11 +21576,14 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
         slice_color = NAVY_SHADES[i % len(NAVY_SHADES)]
         ang = anchor_angles[i]   # spread anchor angle (within slice arc)
 
-        # Start of leader: at the slice's outer edge at the (spread) anchor
-        # angle. The spread algorithm already keeps each anchor strictly
-        # inside its slice arc, so this point always sits on the slice.
-        s1x = PIE_CX + int(_math.sin(ang) * PIE_R)
-        s1y = PIE_CY - int(_math.cos(ang) * PIE_R)
+        # UNIFORM tip penetration: every arrow tip lands at the SAME depth
+        # just inside the donut ring (93% of PIE_R from center). This gives
+        # every callout the same visual "touching the slice" feel — earlier
+        # iterations had only the smallest slice penetrate, which made the
+        # other arrows look like they barely reached the pie.
+        tip_radius = PIE_R * 0.93
+        s1x = PIE_CX + int(_math.sin(ang) * tip_radius)
+        s1y = PIE_CY - int(_math.cos(ang) * tip_radius)
 
         _draw_curved_leader(s1x, s1y, ax, ay, slice_color, bulge_factor[i])
 
@@ -22357,35 +22396,32 @@ def build_deck(data, output_path):
     # "needs repair" warning and broken layout.
     indice_p, indice_s, strategy_slides = _append_strategy_slides(prs)
 
-    # ── Now safely remove slide 3 (DETALHAMENTO DOS ATIVOS — bar chart) ──────
-    # Deck is now: Cover, Composição, Brasil/Offshore, Org Patrimonial,
-    # Org Familiar + 2 índices + 27 strategy sketches = 34 slides.
-    # IMPORTANT: must remove (a) sldId element, (b) relationship from presentation,
-    # (c) the slide part itself.
-    sldIdLst = prs.slides._sldIdLst
-    ids = list(sldIdLst)
-    if len(ids) > 2:
-        slide3_id_elem = ids[2]
-        slide3_rId = slide3_id_elem.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
-        slide3_part = prs.part.related_part(slide3_rId)
-        sldIdLst.remove(slide3_id_elem)
-        try:
-            prs.part.rels.pop(slide3_rId)
-        except (KeyError, AttributeError):
-            pass
-        try:
-            del prs.part.package._parts[slide3_part.partname]
-        except (AttributeError, KeyError):
-            pass
+    # ── Now safely remove any extra slides beyond Composição-BR (slide 2)
+    # and Composição-Exterior (slide 3). The template has slide 4 etc. that
+    # are no longer needed since we restructured the deck. ──────────────────
+    # NB: we KEEP slide 3 (was DETALHAMENTO DOS ATIVOS — bar chart) and
+    # repurpose it as the Composição Patrimonial — EXTERIOR slide. So slide
+    # 3 is NO LONGER removed.
 
-    # ── Redesign slide 2 (composition) — replace original layout ─────────────
-    # Use br aggregated data (same source the original slide used)
+    # ── Redesign slide 2 (Composição — BRASIL) ──────────────────────────────
     s2_new = prs.slides[1]
     _draw_redesigned_slide2(
         s2_new, prs.slide_width, prs.slide_height,
         br, TOTAL_BR,
         indice_p, indice_s, strategy_slides,
         BR_OUTROS_COMPONENTS,
+        jurisdiction='Brasil',
+    )
+
+    # ── Repurpose slide 3 as Composição — EXTERIOR ──────────────────────────
+    s3_new = prs.slides[2]
+    OFF_OUTROS_COMPONENTS = agg.get('off_outros_components', {}) or {}
+    _draw_redesigned_slide2(
+        s3_new, prs.slide_width, prs.slide_height,
+        off, TOTAL_OFF,
+        indice_p, indice_s, strategy_slides,
+        OFF_OUTROS_COMPONENTS,
+        jurisdiction='Exterior',
     )
 
     # Re-number TextBox 13 (slide number) on every remaining slide
