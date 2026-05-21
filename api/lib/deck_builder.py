@@ -19917,11 +19917,11 @@ def aggregate(data):
         top5 = items[:5]
         rest = items[5:]
         rest_total = sum(v for _, v in rest)
-        if 0 < len(rest) <= 3:
-            names = [_SHORT.get(n, n) for n, _ in rest]
-            outros_label = f"Outros ({' + '.join(names)})"
-        else:
-            outros_label = 'Outros'
+        # Always show the bundled category names — transparency beats the
+        # vague generic "Outros" even when 4+ categories are bundled.
+        # Short names (via _SHORT lookup) keep the label compact.
+        names = [_SHORT.get(n, n) for n, _ in rest]
+        outros_label = f"Outros ({' + '.join(names)})"
         components = {outros_label: [n for n, _ in rest]}
         return top5 + [(outros_label, rest_total)], components
 
@@ -21557,9 +21557,26 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, br_sorted, total_br,
         p = head.paragraphs[0]; p.alignment = align
         rb = p.add_run(); rb.text = "■ "
         rb.font.size = Pt(10); rb.font.color.rgb = RGBColor.from_string(slice_color); rb.font.bold = True
-        rn = p.add_run(); rn.text = name.upper()
+        # For long "Outros (...)" labels with 4+ bundled categories, the
+        # parenthetical doesn't fit on one line at 8pt. Split: show
+        # "OUTROS" on the title line and the bundled list at 7pt on the
+        # next line so the value (line 2 of the callout) doesn't collide.
+        display_name = name
+        sub_line = None
+        if name.startswith("Outros (") and name.endswith(")"):
+            inner = name[len("Outros ("):-1]
+            parts = inner.split(" + ")
+            if len(parts) >= 4:
+                display_name = "Outros"
+                sub_line = inner
+        rn = p.add_run(); rn.text = display_name.upper()
         rn.font.name = "Gotham SSm Bold"; rn.font.size = Pt(8); rn.font.color.rgb = GRAY_MED; rn.font.bold = True
-        valbox = _fixed_tf(cx, cy + Inches(0.22), CALLOUT_W, Inches(0.32))
+        if sub_line:
+            psub = head.add_paragraph(); psub.alignment = align
+            rs = psub.add_run(); rs.text = f"({sub_line})"
+            rs.font.name = "Gotham SSm"; rs.font.size = Pt(6); rs.font.color.rgb = GRAY_MED; rs.font.italic = True
+        val_y_offset = Inches(0.34) if sub_line else Inches(0.22)
+        valbox = _fixed_tf(cx, cy + val_y_offset, CALLOUT_W, Inches(0.32))
         p = valbox.paragraphs[0]; p.alignment = align
         rv = p.add_run(); rv.text = f"{_brl_short(val)}  "
         rv.font.name = "Gotham SSm Bold"; rv.font.size = Pt(13); rv.font.color.rgb = NAVY; rv.font.bold = True
