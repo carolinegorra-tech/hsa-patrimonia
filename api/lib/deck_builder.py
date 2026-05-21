@@ -21429,14 +21429,29 @@ def _add_strategy_sketch_slide(prs, strategy_name: str, accent_color, theme_labe
 
 
 def _add_indice_slide(prs, theme_label: str, accent_color, strategies):
-    """Creates an Índice slide listing all strategies of a theme, grouped by
-    subtema. Each strategy line becomes a hyperlink target placeholder
-    (wired in second pass)."""
+    """Creates an Índice slide laid out as a 3-column structured table:
+
+      ┌────────────────────────────┬───────────────────┬───────────────────────────┐
+      │ ESTRATÉGIA                 │ COMENTÁRIOS       │ LEGAL BASIS & UPDATES    │
+      ├────────────────────────────┴───────────────────┴───────────────────────────┤
+      │ NOME DA SEÇÃO (band)                                                        │
+      ├────────────────────────────┬───────────────────┬───────────────────────────┤
+      │ ▸ Strategy name (link)     │ (blank for notes) │ (blank for legal refs)   │
+      │ ...                        │                   │                           │
+      └────────────────────────────┴───────────────────┴───────────────────────────┘
+
+    Each strategy row's first cell carries an internal hyperlink to the
+    matching strategy sketch slide (wired later by _wire_strategy_hyperlinks).
+    Cells in columns 2 and 3 are left empty so the lawyer/client can fill
+    them in directly in PowerPoint.
+    """
+    from pptx.enum.shapes import MSO_SHAPE
     sl = _append_blank_slide_layout(prs)
     prs_w = prs.slide_width; prs_h = prs.slide_height
     _clone_chrome_from_template(prs, sl)
 
-    # Theme tag
+    # Theme tag + title — identical to the previous design for visual
+    # continuity (so the page header still says ÍNDICE / Planejamento ...).
     tag = sl.shapes.add_textbox(Inches(0.45), Inches(1.10), prs_w - Inches(0.90), Inches(0.30)).text_frame
     tag.margin_left = tag.margin_top = tag.margin_bottom = 0
     p = tag.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
@@ -21444,69 +21459,127 @@ def _add_indice_slide(prs, theme_label: str, accent_color, strategies):
     r.font.name = "Gotham SSm Bold"; r.font.size = Pt(9); r.font.bold = True
     r.font.color.rgb = GRAY_MED
 
-    ttl = sl.shapes.add_textbox(Inches(0.45), Inches(1.40), prs_w - Inches(0.90), Inches(0.70)).text_frame
+    ttl = sl.shapes.add_textbox(Inches(0.45), Inches(1.40), prs_w - Inches(0.90), Inches(0.55)).text_frame
     ttl.margin_left = ttl.margin_top = ttl.margin_bottom = 0
     p = ttl.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
     r = p.add_run(); r.text = theme_label
-    r.font.name = "Gotham SSm Bold"; r.font.size = Pt(22); r.font.bold = True
+    r.font.name = "Gotham SSm Bold"; r.font.size = Pt(20); r.font.bold = True
     r.font.color.rgb = accent_color
 
-    # Two columns of subtemas + strategies. Total strategies vary (12-19), so
-    # we balance into 2 columns by item count.
-    flat = []
-    for sub_name, items in strategies:
-        flat.append(('sub', sub_name))
-        for it in items:
-            flat.append(('item', it))
-    # Split roughly in half (prefer break on subtema)
-    half = len(flat) // 2
-    # nudge to break on a subtema boundary
-    while half < len(flat) and flat[half][0] == 'item':
-        half += 1
-    col1, col2 = flat[:half], flat[half:]
+    # Decide per-theme styling. Section-header bands use a light tint of the
+    # accent so they stand out without overwhelming the table.
+    is_patrimonial = ("Patrimonial" in theme_label)
+    SECTION_TINT  = RGBColor(0xE8, 0xEE, 0xF5) if is_patrimonial else RGBColor(0xFA, 0xF7, 0xE8)
+    # Darker text colour for section headers and strategy text — better
+    # contrast than the brand lime would give on white.
+    DEEP_THEME    = RGBColor(0x1F, 0x4E, 0x79) if is_patrimonial else RGBColor(0x9C, 0x7A, 0x00)
 
-    COL_TOP = Inches(2.50)
-    COL_W   = (prs_w - Inches(1.35)) // 2
-    COL_X1  = Inches(0.45)
-    COL_X2  = Inches(0.45) + COL_W + Inches(0.30)
-    LINE_H  = Inches(0.30)
+    # Table geometry. We have ~4.75" available between the title block and
+    # the footer band; row heights are sized to fit the bigger of the two
+    # tables (Sucessório has 17 strategies + 5 sections = 22 rows total).
+    TBL_X      = Inches(0.50)
+    TBL_W      = prs_w - Inches(1.00)
+    # Column proportions: Estratégia gets 45%, Comentários 35%, Legal Basis 20%.
+    COL_W_STRAT = int(TBL_W * 0.45)
+    COL_W_COMM  = int(TBL_W * 0.35)
+    COL_W_LEGAL = TBL_W - COL_W_STRAT - COL_W_COMM
 
-    sl._indice_runs = []   # list of (run, strategy_name) for second-pass linking
+    # Count rows we'll need so we can size them dynamically (smaller rows
+    # when the theme has many strategies).
+    n_sections = len(strategies)
+    n_items = sum(len(items) for _, items in strategies)
+    total_rows = n_sections + n_items
+    # Available vertical band for the table body (header excluded).
+    TBL_TOP    = Inches(2.20)
+    TBL_BOTTOM = prs_h - Inches(0.85)   # leave ~0.85" for footer
+    TBL_AVAIL  = TBL_BOTTOM - TBL_TOP
+    HEADER_H   = Inches(0.34)
+    # Scale row heights to fit every row in the available space. Section
+    # rows are ~25% taller than strategy rows so the section bands read as
+    # group separators rather than just another line.
+    # body_h = section_count * 1.25 * row_h + item_count * row_h
+    body_h = TBL_AVAIL - HEADER_H
+    # Cap row heights so a sparse theme doesn't end up with absurdly tall rows.
+    unit_h = min(int(body_h / (n_sections * 1.25 + n_items)), int(Inches(0.32)))
+    SECTION_H  = int(unit_h * 1.25)
+    ROW_H      = unit_h
 
-    def render_col(items, x):
-        cursor_y = COL_TOP
-        first_sub = True
-        for kind, text in items:
-            if kind == 'sub':
-                # Add extra breathing room before each subtema header EXCEPT
-                # the first one in the column. Without this gap, sections
-                # like GOVERNANÇA end up visually glued to the last item of
-                # the previous subtema.
-                if not first_sub:
-                    cursor_y += Inches(0.40)
-                first_sub = False
-                tb = sl.shapes.add_textbox(x, cursor_y, COL_W, LINE_H).text_frame
-                tb.margin_left = tb.margin_top = tb.margin_bottom = 0
-                p = tb.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
-                r = p.add_run(); r.text = text.upper()
-                r.font.name = "Gotham SSm Bold"; r.font.size = Pt(9); r.font.bold = True
-                r.font.color.rgb = NAVY
-                cursor_y += LINE_H
-            else:
-                tb = sl.shapes.add_textbox(x, cursor_y, COL_W, LINE_H).text_frame
-                tb.margin_left = tb.margin_top = tb.margin_bottom = 0
-                tb.word_wrap = True
-                p = tb.paragraphs[0]; p.alignment = PP_ALIGN.CENTER
-                r = p.add_run(); r.text = f"›  {text}"
-                # smaller font for long items
-                fsize = Pt(8) if len(text) > 50 else Pt(9)
-                r.font.name = "Gotham SSm Bold"; r.font.size = fsize; r.font.bold = False
-                r.font.color.rgb = accent_color
-                sl._indice_runs.append((r, text))
-                cursor_y += LINE_H
+    # ─── Column-header row ──────────────────────────────────────────────
+    HDR_Y = TBL_TOP
+    HDR_COLS = [
+        ("ESTRATÉGIA",           TBL_X,                                 COL_W_STRAT),
+        ("COMENTÁRIOS",          TBL_X + COL_W_STRAT,                   COL_W_COMM),
+        ("LEGAL BASIS & UPDATES",TBL_X + COL_W_STRAT + COL_W_COMM,      COL_W_LEGAL),
+    ]
+    for label, cx, cw in HDR_COLS:
+        rec = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, cx, HDR_Y, cw, HEADER_H)
+        rec.fill.solid(); rec.fill.fore_color.rgb = NAVY
+        rec.line.color.rgb = NAVY
+        tf = rec.text_frame
+        tf.margin_left = Pt(8); tf.margin_right = Pt(8)
+        tf.margin_top = Pt(2); tf.margin_bottom = Pt(2)
+        tf.word_wrap = True
+        from pptx.enum.text import MSO_ANCHOR as _MA
+        tf.vertical_anchor = _MA.MIDDLE
+        p = tf.paragraphs[0]; p.alignment = PP_ALIGN.LEFT
+        r = p.add_run(); r.text = label
+        r.font.name = "Gotham SSm Bold"; r.font.size = Pt(9); r.font.bold = True
+        r.font.color.rgb = WHITE
 
-    render_col(col1, COL_X1)
-    render_col(col2, COL_X2)
+    # ─── Body rows ─────────────────────────────────────────────────────
+    sl._indice_runs = []   # (run, strategy_name) tuples for the wire pass
+    cursor_y = HDR_Y + HEADER_H
+
+    for sec_name, items in strategies:
+        # Section band — spans all 3 columns visually as one tinted bar.
+        sec_rec = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, TBL_X, cursor_y, TBL_W, SECTION_H)
+        sec_rec.fill.solid(); sec_rec.fill.fore_color.rgb = SECTION_TINT
+        sec_rec.line.color.rgb = GRAY_LT
+        sec_rec.line.width = Pt(0.5)
+        stf = sec_rec.text_frame
+        stf.margin_left = Pt(10); stf.margin_right = Pt(8)
+        stf.margin_top = Pt(2);  stf.margin_bottom = Pt(2)
+        stf.word_wrap = True
+        from pptx.enum.text import MSO_ANCHOR as _MA
+        stf.vertical_anchor = _MA.MIDDLE
+        p = stf.paragraphs[0]; p.alignment = PP_ALIGN.LEFT
+        r = p.add_run(); r.text = sec_name.upper()
+        r.font.name = "Gotham SSm Bold"; r.font.size = Pt(9); r.font.bold = True
+        r.font.color.rgb = DEEP_THEME
+        cursor_y += SECTION_H
+
+        for strat in items:
+            # Per-strategy row: three white cells in a row. The first cell
+            # gets a hyperlink. The other two are blank — the client/lawyer
+            # types directly into them in PowerPoint.
+            for col_label, cell_x, cell_w in (
+                ('strat', TBL_X,                            COL_W_STRAT),
+                ('comm',  TBL_X + COL_W_STRAT,              COL_W_COMM),
+                ('legal', TBL_X + COL_W_STRAT + COL_W_COMM, COL_W_LEGAL),
+            ):
+                cell = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, cell_x, cursor_y, cell_w, ROW_H)
+                cell.fill.solid(); cell.fill.fore_color.rgb = WHITE
+                cell.line.color.rgb = GRAY_LT
+                cell.line.width = Pt(0.4)
+                ctf = cell.text_frame
+                ctf.margin_left = Pt(8); ctf.margin_right = Pt(8)
+                ctf.margin_top = Pt(2);  ctf.margin_bottom = Pt(2)
+                ctf.word_wrap = True
+                ctf.vertical_anchor = _MA.MIDDLE
+                if col_label == 'strat':
+                    p = ctf.paragraphs[0]; p.alignment = PP_ALIGN.LEFT
+                    # Bullet + strategy name. Smaller font for long names.
+                    rb = p.add_run(); rb.text = "▸  "
+                    rb.font.name = "Gotham SSm Bold"; rb.font.size = Pt(8)
+                    rb.font.color.rgb = DEEP_THEME; rb.font.bold = True
+                    rs = p.add_run(); rs.text = strat
+                    fsize = Pt(8) if len(strat) > 55 else Pt(9)
+                    rs.font.name = "Gotham SSm Bold"; rs.font.size = fsize
+                    rs.font.color.rgb = DEEP_THEME; rs.font.bold = False
+                    sl._indice_runs.append((rs, strat))
+                # Comments + Legal Basis cells stay empty for user input.
+            cursor_y += ROW_H
+
     sl._indice_theme = theme_label
     return sl
 
