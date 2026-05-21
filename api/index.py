@@ -66,10 +66,35 @@ EXTRACT_PROMPT = """Extraia todos os bens, direitos e informações familiares d
 REGRAS CRÍTICAS:
 1. EXTRAIA ITEM POR ITEM — não use o total do grupo. Crie UM item para CADA bem listado nos PDFs, com sua descrição completa e valor individual em 31/12 do ano da declaração.
 2. Se a soma dos itens individuais não bater exatamente com o "Total Grupo X" do DIRPF, mantenha os valores individuais como foram declarados (a diferença pode ser ajustes do meio do ano).
-3. jurisdiction = "Brasil" ou "Offshore"; dirpf = valor em R$ da DIRPF; dcbe = valor em USD da DCBE
-4. Inclua dívidas da Ficha 8 no array "debts" (uma entrada por dívida)
-5. Inclua cônjuge da Ficha 2 em "spouse"; dependentes da Ficha 3
-6. JSON 100% completo e fechado. Valores SEMPRE numéricos com centavos exatos.
+
+3. JURISDIÇÃO — Defina pela LOCALIZAÇÃO REAL do ativo (campo "País" da DIRPF), NÃO pelo documento de origem:
+   - jurisdiction = "Brasil"   → ativo no Brasil (campo País = "Brasil" / código 105)
+   - jurisdiction = "Offshore" → ativo no exterior (qualquer outro país)
+
+   ⚠ ATENÇÃO MÁXIMA: O DIRPF declara o patrimônio GLOBAL em BRL — INCLUI ativos no exterior. NÃO assuma que tudo que vem do DIRPF é "Brasil". Olhe o campo "País" de CADA item antes de classificar.
+
+   Códigos DIRPF que tipicamente identificam ativos NO EXTERIOR (sempre confirme olhando o campo "País" do item):
+   - Grupo 03 Participações: 31 (Ações no exterior), 39 (Outras participações exterior), 73 (Trust — Lei 14.754/23), 74 (Outras part. empresa exterior), 76 (Entidade controlada no exterior — Lei 14.754)
+   - Grupo 04 Aplicações: 45 (Ativos virtuais / cripto), 47, 79 (Aplicações no exterior)
+   - Grupo 06 Contas: qualquer código com País ≠ Brasil (conta em banco estrangeiro)
+   - Grupo 01 Imóveis: imóvel com País ≠ Brasil
+   - Todos os itens do DCBE → Offshore por definição
+
+4. MERGE DIRPF + DCBE — Quando o MESMO ativo offshore aparece nos DOIS documentos (mesma entidade/empresa/banco, mesmo país), UNA em UM ÚNICO item:
+   - jurisdiction: "Offshore"
+   - dirpf: valor em R$ (vindo da DIRPF)
+   - dcbe: valor em USD (vindo da DCBE)
+   - desc: nome da entidade (use a versão mais completa entre os dois documentos)
+   - loc: país de localização
+
+   Exemplo: "DOE FAMILY HOLDINGS LTD." aparece na DIRPF código 74 com R$ 17.000.000 E na DCBE Ficha A com US$ 3.420.000 → cria UM único item: {desc:"DOE FAMILY HOLDINGS LTD.", loc:"Ilhas Cayman", jurisdiction:"Offshore", subcategory:"Participação em empresa no exterior (LLC, offshore, BVI, Cayman)", dirpf:17000000, dcbe:3420000, ...}
+
+   NUNCA crie dois itens separados (um só com dirpf, outro só com dcbe) se eles representam a MESMA entidade. Faça match por nome de entidade (banco, empresa, fundo, trust, conta). Variações como "Citibank Private Bank" vs "Citibank International" ou "Doe Holdings Ltd." vs "Doe Holdings Limited" DEVEM ser merged. Se não conseguir fazer o match com certeza razoável, mantenha separado.
+
+5. dirpf = valor em R$ da DIRPF; dcbe = valor em USD da DCBE (item pode ter apenas um dos dois ou ambos)
+6. Inclua dívidas da Ficha 8 no array "debts" (uma entrada por dívida)
+7. Inclua cônjuge da Ficha 2 em "spouse"; dependentes da Ficha 3
+8. JSON 100% completo e fechado. Valores SEMPRE numéricos com centavos exatos.
 
 CLASSIFICAÇÃO OBRIGATÓRIA (3 níveis) — Para cada item, ESCOLHA OBRIGATORIAMENTE a melhor opção (nunca deixe em branco):
 - name: grupo (nível 1)
