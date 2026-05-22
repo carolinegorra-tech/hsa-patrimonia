@@ -183,6 +183,40 @@ const subsubcategoriesFor = (groupName, subName) => {
   return TAXONOMY[canon][subName];
 };
 
+// ── Lista de documentos de suporte que solicitamos ao cliente ─────────────
+// Os 2 primários (DIRPF + DCBE) são processados pela IA — os 10 abaixo são
+// apenas armazenados/anexados ao processo. A IA usa esta lista para gerar
+// o checklist visual do que está presente vs faltando.
+const SUPPORT_DOCS = [
+  {key:"certidao",       icon:"💍", label:"Certidão de Casamento", sub:"+ pacto antenupcial (se aplicável)"},
+  {key:"familia",        icon:"👨‍👩‍👧", label:"Estrutura Familiar", sub:"Nome/idade de filhos, netos, estados civis"},
+  {key:"alteracoes",     icon:"📈", label:"Alterações Patrimoniais", sub:"2025-2026 e previsões de curto/médio prazo"},
+  {key:"societario_br",  icon:"🏢", label:"Documentos Societários BR", sub:"Contratos, estatutos, balanço, governança"},
+  {key:"societario_off", icon:"🌐", label:"Documentos Societários Offshore", sub:"M&A, Register of Members, Trust Deed"},
+  {key:"lei_14754",      icon:"⚖️", label:"Tributário Offshore", sub:"Lei nº 14.754/23 — regime aplicável"},
+  {key:"imoveis",        icon:"🏠", label:"Imóveis", sub:"Destinação de uso e fluxo de rendimentos"},
+  {key:"emprestimos",    icon:"💰", label:"Empréstimos", sub:"Concedidos ou tomados, em vigor"},
+  {key:"doacoes",        icon:"🎁", label:"Doações e Heranças", sub:"Recebidas/realizadas + ITCMD"},
+  {key:"previdencia",    icon:"🛡️", label:"Previdência e Seguros", sub:"VGBL/PGBL + seguros de vida BR/exterior"},
+];
+
+// All 12 docs (DIRPF + DCBE + 10 suporte) — used by the footer checklist
+// chip row. Short labels keep the row scannable.
+const ALL_DOCS_CHECKLIST = [
+  {key:"dirpf",          short:"DIRPF"},
+  {key:"dcbe",           short:"DCBE"},
+  {key:"certidao",       short:"Certidão"},
+  {key:"familia",        short:"Família"},
+  {key:"alteracoes",     short:"Alterações"},
+  {key:"societario_br",  short:"Societário BR"},
+  {key:"societario_off", short:"Societário Off"},
+  {key:"lei_14754",      short:"Tributário Off"},
+  {key:"imoveis",        short:"Imóveis"},
+  {key:"emprestimos",    short:"Empréstimos"},
+  {key:"doacoes",        short:"Doações"},
+  {key:"previdencia",    short:"Previdência"},
+];
+
 const DEMO = {
   client:"JANE MARGARET DOE", year:2024,
   spouse:{name:"JOHN ROBERT DOE", marriage_regime:"Comunhão Parcial de Bens", marriage_date:"08/04/2003"},
@@ -550,7 +584,16 @@ function ChooseSessionModal({fresh, saved, onPick, onCancel}){
 
 function App(){
   const [step,setStep]=useState("auth-check");
-  const [files,setFiles]=useState({dirpf:null,dcbe:null});
+  // Files state — 2 primary docs (DIRPF/DCBE) that go to the AI extractor,
+  // plus 10 supplementary docs that the lawyer holds as supporting material
+  // (no AI processing — they're just tracked so the missing-doc checklist
+  // works). Keys match SUPPORT_DOCS below.
+  const [files,setFiles]=useState({
+    dirpf:null, dcbe:null,
+    certidao:null, familia:null, alteracoes:null,
+    societario_br:null, societario_off:null, lei_14754:null,
+    imoveis:null, emprestimos:null, doacoes:null, previdencia:null,
+  });
   const [data,setData]=useState(null);
 
   // Auto-save full client state on every data change while in verify screen
@@ -945,19 +988,22 @@ function App(){
         : activeGrps.filter(g => g.name === activeCat));
 
   if(step==="upload")return(
-    <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Nunito Sans',sans-serif",color:C.text,display:"flex",alignItems:"center",justifyContent:"center",padding:"32px 20px"}}>
+    <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Nunito Sans',sans-serif",color:C.text,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"32px 20px"}}>
       <style>{style}</style>
       <ChooseSessionModal fresh={pendingFresh} saved={pendingSaved} onPick={handlePickSession} onCancel={handleCancelSession}/>
-      <div style={{width:"100%",maxWidth:640}}>
-        <div style={{textAlign:"center",marginBottom:32}}>
+      <div style={{width:"100%",maxWidth:880}}>
+        <div style={{textAlign:"center",marginBottom:28}}>
           <div style={{display:"inline-flex",alignItems:"center",gap:8,background:C.surface,border:`1px solid ${C.border}`,borderRadius:20,padding:"5px 16px",marginBottom:20}}>
             <div style={{width:5,height:5,borderRadius:"50%",background:C.gold}} className="pu"/>
             <span style={{color:C.muted,fontSize:10,letterSpacing:"0.2em",fontWeight:700}}>PATRIMÔNIO FAMILIAR · CONFIDENCIAL</span>
           </div>
           <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:38,fontWeight:600,color:C.text,lineHeight:1.1}}>Gerador de<br/><span style={{color:C.gold,fontStyle:"italic"}}>Relatório Patrimonial</span></h1>
-          <p style={{color:C.muted,fontSize:13,marginTop:10,lineHeight:1.6}}>Carregue os arquivos da DIRPF e DCBE do cliente para extrair, verificar e gerar os relatórios.</p>
+          <p style={{color:C.muted,fontSize:13,marginTop:10,lineHeight:1.6}}>Carregue a documentação do cliente. DIRPF e DCBE são processados pela IA; os demais documentos ficam anexados ao processo.</p>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
+
+        {/* PRIMARY DOCS — DIRPF + DCBE (AI-processed) */}
+        <p style={{color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.15em",marginBottom:8,paddingLeft:2}}>1. DOCUMENTOS PRINCIPAIS · EXTRAÍDOS PELA IA</p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:24}}>
           {[{key:"dirpf",ref:dirpfRef,icon:"📋",label:"DIRPF 2025",sub:"Declaração de Imposto de Renda",badge:"Receita Federal"},{key:"dcbe",ref:dcbeRef,icon:"🌐",label:"DCBE 2025",sub:"Capitais Brasileiros no Exterior",badge:"Banco Central"}].map(({key,ref,icon,label,sub,badge})=>(
             <div key={key} className="uz" onClick={()=>ref.current?.click()} style={{background:files[key]?"rgba(191,148,71,.06)":C.card,border:`1.5px dashed ${files[key]?C.gold:C.border}`,borderRadius:12,padding:"28px 20px",textAlign:"center",cursor:"pointer"}}>
               <input ref={ref} type="file" accept=".pdf" style={{display:"none"}} onChange={e=>setFiles(p=>({...p,[key]:e.target.files[0]}))}/>
@@ -968,10 +1014,93 @@ function App(){
             </div>
           ))}
         </div>
+
+        {/* SUPPORT DOCS — the 10 supplementary documents from HSA's checklist.
+            Denser grid (3 cols, compact cards) so all 10 fit without too
+            much scrolling. Accept .pdf + common Office types + .zip for
+            consolidated bundles, since these aren't AI-processed and the
+            lawyer just needs to attach whatever the client sent. */}
+        <p style={{color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.15em",marginBottom:8,paddingLeft:2}}>2. DOCUMENTAÇÃO DE SUPORTE · ANEXOS AO PROCESSO</p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:24}}>
+          {SUPPORT_DOCS.map(({key,icon,label,sub}) => {
+            const has = !!files[key];
+            return (
+              <label key={key} className="uz" style={{background:has?"rgba(60,174,122,.06)":C.card,border:`1.25px dashed ${has?C.green:C.border}`,borderRadius:10,padding:"14px 12px",cursor:"pointer",display:"flex",flexDirection:"column",gap:4,position:"relative"}}>
+                <input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.zip" multiple={false}
+                  style={{display:"none"}}
+                  onChange={e=>setFiles(p=>({...p,[key]:e.target.files[0]}))}/>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:18,lineHeight:1}}>{has?"✅":icon}</span>
+                  <span style={{fontWeight:700,fontSize:11,color:has?C.green:C.text,lineHeight:1.25}}>{label}</span>
+                </div>
+                <span style={{color:C.muted,fontSize:9,lineHeight:1.4,paddingLeft:26}} title={has?files[key].name:sub}>
+                  {has
+                    ? (files[key].name.length>28 ? files[key].name.slice(0,26)+"…" : files[key].name)
+                    : sub}
+                </span>
+                {has && (
+                  <button onClick={e=>{e.preventDefault();e.stopPropagation();setFiles(p=>({...p,[key]:null}));}}
+                    title="Remover anexo"
+                    style={{position:"absolute",top:6,right:8,background:"transparent",border:"none",color:C.dim,cursor:"pointer",fontSize:14,padding:0,lineHeight:1}}>×</button>
+                )}
+              </label>
+            );
+          })}
+        </div>
+
+        {/* ── CHECKLIST FOOTER — what's present vs missing ───────────────
+            Horizontal chip row showing all 12 documents. Each chip is
+            green ✓ when uploaded, red ✗ when missing. Lets the lawyer
+            (and client) see at a glance what's still pending without
+            scrolling through cards. */}
+        {(() => {
+          const present = ALL_DOCS_CHECKLIST.filter(d => files[d.key]);
+          const missing = ALL_DOCS_CHECKLIST.filter(d => !files[d.key]);
+          return (
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 16px",marginBottom:18}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
+                <span style={{color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.15em"}}>STATUS DA DOCUMENTAÇÃO</span>
+                <span style={{color:missing.length===0?C.green:C.muted,fontSize:11,fontWeight:600}}>
+                  {present.length}/{ALL_DOCS_CHECKLIST.length} recebidos
+                  {missing.length===0 && <span style={{marginLeft:6}}>✓ completo</span>}
+                </span>
+              </div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                {ALL_DOCS_CHECKLIST.map(({key,short}) => {
+                  const has = !!files[key];
+                  return (
+                    <span key={key}
+                      title={has?"Recebido — clique para limpar":"Faltando — role para cima para anexar"}
+                      style={{
+                        display:"inline-flex",alignItems:"center",gap:5,
+                        background: has ? "rgba(60,174,122,.10)" : "rgba(224,82,82,.08)",
+                        color:      has ? C.green : C.red,
+                        border:    `1px solid ${has?"rgba(60,174,122,.35)":"rgba(224,82,82,.30)"}`,
+                        borderRadius: 999,
+                        padding: "4px 10px",
+                        fontSize: 10.5,
+                        fontWeight: 600,
+                        whiteSpace: "nowrap",
+                      }}>
+                      <span style={{fontSize:10,fontWeight:800}}>{has?"✓":"✗"}</span>
+                      {short}
+                    </span>
+                  );
+                })}
+              </div>
+              {missing.length > 0 && (
+                <p style={{color:C.muted,fontSize:10,marginTop:8,lineHeight:1.5,fontStyle:"italic"}}>
+                  Faltam {missing.length} {missing.length===1?"documento":"documentos"}: {missing.map(m=>m.short).join(" · ")}
+                </p>
+              )}
+            </div>
+          );
+        })()}
+
         {error&&<div style={{background:"rgba(224,82,82,.1)",border:`1px solid ${C.red}`,borderRadius:8,padding:"12px 16px",color:C.red,fontSize:12,marginBottom:14}}>⚠ {error}</div>}
         <div style={{display:"flex",gap:12,justifyContent:"center",marginBottom:20}}>
           <button className="bg" style={{background:C.gold,color:"#080C14",padding:"13px 30px",borderRadius:8,border:"none",cursor:(files.dirpf||files.dcbe)&&!loading?"pointer":"not-allowed",fontFamily:"'Nunito Sans',sans-serif",fontWeight:700,fontSize:14,letterSpacing:"0.05em",opacity:(files.dirpf||files.dcbe)&&!loading?1:0.4}} onClick={processFiles}>
-            {loading?<span style={{display:"flex",alignItems:"center",gap:8}}><span style={{width:13,height:13,border:"2px solid rgba(0,0,0,.3)",borderTopColor:"#000",borderRadius:"50%",animation:"spin .8s linear infinite",display:"inline-block"}}/>{loadMsg||"Processando..."}</span>:"→ Processar Arquivos PDF"}
+            {loading?<span style={{display:"flex",alignItems:"center",gap:8}}><span style={{width:13,height:13,border:"2px solid rgba(0,0,0,.3)",borderTopColor:"#000",borderRadius:"50%",animation:"spin .8s linear infinite",display:"inline-block"}}/>{loadMsg||"Processando..."}</span>:"→ Processar DIRPF + DCBE"}
           </button>
           <button className="gh" style={{background:"transparent",color:C.muted,padding:"13px 22px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>{
             const saved = loadClientState(DEMO.client, DEMO.year);
@@ -985,7 +1114,7 @@ function App(){
             }
           }}>Usar Dados Demo</button>
         </div>
-        <p style={{textAlign:"center",color:C.dim,fontSize:11,lineHeight:1.6}}>Os documentos são processados via API e não são armazenados.<br/>Também é possível carregar apenas um dos dois arquivos.</p>
+        <p style={{textAlign:"center",color:C.dim,fontSize:11,lineHeight:1.6}}>Apenas DIRPF e DCBE são enviados ao processamento de IA.<br/>Os documentos de suporte ficam anexados localmente ao processo do cliente.</p>
       </div>
     </div>
   );
@@ -1630,7 +1759,7 @@ function App(){
 
         <div style={{display:"flex",gap:10,justifyContent:"center"}}>
           <button className="gh" style={{background:"transparent",color:C.muted,padding:"11px 24px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>setStep("verify")}>← Voltar para verificação</button>
-          <button className="gh" style={{background:"transparent",color:C.muted,padding:"11px 24px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>{setStep("upload");setData(null);setFiles({dirpf:null,dcbe:null});setError("");setDownloadStatus({});}}>Novo Cliente</button>
+          <button className="gh" style={{background:"transparent",color:C.muted,padding:"11px 24px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>{setStep("upload");setData(null);setFiles({dirpf:null,dcbe:null,certidao:null,familia:null,alteracoes:null,societario_br:null,societario_off:null,lei_14754:null,imoveis:null,emprestimos:null,doacoes:null,previdencia:null});setError("");setDownloadStatus({});}}>Novo Cliente</button>
         </div>
       </div>
     </div>
