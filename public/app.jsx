@@ -217,6 +217,67 @@ const ALL_DOCS_CHECKLIST = [
   {key:"previdencia",    short:"Previdência"},
 ];
 
+// ── Estratégias de Planejamento (sincronizadas com deck_builder.py) ──────
+// Espelha exatamente o conteúdo de PATRIMONIAL_STRATEGIES e
+// SUCESSORIO_STRATEGIES no backend. Se mudar uma lista lá, mudar aqui também.
+// O advogado seleciona o que vai entrar no PPT na tela "strategies".
+const PATRIMONIAL_STRATEGIES = [
+  ["Estruturas de Organização Patrimonial", [
+    "Trust",
+    "Constituição de Offshore",
+    "Constituição de Holding (operacional e/ou patrimonial)",
+    "Holding Imobiliária",
+    "Fundo Exclusivo / Fundo Fechado",
+    "Holding Patrimonial (limitadas, anônimas fechadas, em conta de participação)",
+    "Mútuo (empréstimo entre partes relacionadas)",
+  ]],
+  ["Planejamento Tributário e Residência", [
+    "Mudança de Residência Fiscal (saída do Brasil)",
+    "Planejamento Pré-Imigratório",
+  ]],
+  ["Governança", [
+    "Governança Corporativa (Acordo de Sócios, Estatuto, Regimentos Internos)",
+    "Governança Familiar (Protocolo Familiar, Conselho de Família)",
+    "Política de Dividendos",
+  ]],
+];
+
+const SUCESSORIO_STRATEGIES = [
+  ["Instrumentos de Transmissão em Vida", [
+    "Doações (simples, com encargos, com reserva de usufruto, com cláusulas restritivas)",
+    "Antecipação de Herança",
+  ]],
+  ["Instrumentos de Transmissão Causa Mortis", [
+    "Testamentos (Brasil e Exterior — mirror wills)",
+    "Testamentos com cláusulas restritivas",
+    "Legados específicos",
+  ]],
+  ["Proteção e Incapacidade", [
+    "Curatela (judicial e extrajudicial)",
+    "Diretivas Antecipadas de Vontade (mandato duradouro / living will)",
+    "Tomada de Decisão Apoiada",
+  ]],
+  ["Regime de Bens", [
+    "Comunhão Parcial de Bens",
+    "Comunhão Universal de Bens",
+    "Separação Total de Bens (convencional)",
+    "Pacto Antenupcial / Alteração de Regime de Bens",
+  ]],
+  ["Outros Instrumentos Sucessórios", [
+    "Partilha em Vida",
+    "Inventário Extrajudicial (planejamento preventivo)",
+    "Seguro de Vida (como ferramenta de liquidez sucessória)",
+    "Beneficiários em previdência privada (VGBL/PGBL)",
+    "Acordo de Acionistas com cláusulas sucessórias (tag along, drag along, opção de compra)",
+  ]],
+];
+
+// Flat list of all strategy names (used for "selecionar todos" and counts)
+const ALL_STRATEGY_NAMES = [
+  ...PATRIMONIAL_STRATEGIES.flatMap(([_, items]) => items),
+  ...SUCESSORIO_STRATEGIES.flatMap(([_, items]) => items),
+];
+
 const DEMO = {
   client:"JANE MARGARET DOE", year:2024,
   spouse:{name:"JOHN ROBERT DOE", marriage_regime:"Comunhão Parcial de Bens", marriage_date:"08/04/2003"},
@@ -610,6 +671,10 @@ function App(){
   // Brasil + Offshore stacked, each with the DIRPF total (in BRL) in the
   // header. Triggered by clicking the "Total DIRPF" KPI card.
   const [dirpfBreakdown,setDirpfBreakdown]=useState(false);
+  // Selected planning strategies. null = nunca abriu o formulário, então o
+  // deck usa o catálogo completo (comportamento legado). Set vazio ou
+  // populado = advogado escolheu, só as marcadas vão pro PPT.
+  const [selectedStrategies, setSelectedStrategies] = useState(null);
   const dirpfRef=useRef();
   const dcbeRef=useRef();
 
@@ -713,10 +778,17 @@ function App(){
   const downloadOne = async (kind) => {
     setDownloadingKind(kind); setError("");
     try {
+      // Build payload: base data + selected_strategies when the lawyer
+      // picked some on the planning form. Backend (deck_builder) only
+      // uses this for the full-deck "deck" kind; harmless on others.
+      // null = lawyer never opened the form → backend uses full catalog.
+      const payload = selectedStrategies !== null
+        ? {...data, selected_strategies: Array.from(selectedStrategies)}
+        : data;
       const r = await fetch(KIND_TO_URL[kind], {
         method: "POST",
         headers: {"Content-Type":"application/json", ...authHeaders()},
-        body: JSON.stringify(data),
+        body: JSON.stringify(payload),
       });
       if (!r.ok) {
         const t = await r.text();
@@ -1684,6 +1756,10 @@ function App(){
     </div>
   );
 
+  // ──────────────────────────────────────────────────────────────────
+  // step="done" — Tela 1 de download. Dois cards: Excel (baixa direto) +
+  // botão pra abrir o formulário de estratégias (caminho pro PPT).
+  // ──────────────────────────────────────────────────────────────────
   if(step==="done")return(
     <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Nunito Sans',sans-serif",color:C.text,display:"flex",alignItems:"center",justifyContent:"center",padding:"32px 20px"}} className="fi">
       <style>{style}</style>
@@ -1691,15 +1767,276 @@ function App(){
         <div style={{fontSize:48,marginBottom:12}}>📥</div>
         <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:30,fontWeight:600,color:C.text,marginBottom:8}}>Arquivos disponíveis</h2>
         <p style={{color:C.muted,fontSize:13,lineHeight:1.7,marginBottom:24}}>
-          Clique em cada arquivo para baixar. Você pode baixar quantas vezes precisar.
+          Baixe a lista de ativos em Excel, ou avance para selecionar as estratégias que entrarão na apresentação.
         </p>
 
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:24}}>
+          {/* Card 1: Excel — download direto */}
+          {(() => {
+            const kind = "excel";
+            const isDownloading = downloadingKind === kind;
+            const wasDownloaded = !!downloadStatus[kind];
+            return (
+              <button key={kind} className="bg"
+                disabled={isDownloading}
+                onClick={()=>downloadOne(kind)}
+                style={{
+                  background: wasDownloaded ? "rgba(60,174,122,.06)" : C.card,
+                  color: C.text, padding: "22px 18px", borderRadius: 12,
+                  border: `1.5px solid ${wasDownloaded ? C.green : C.border}`,
+                  cursor: isDownloading ? "wait" : "pointer",
+                  fontFamily: "'Nunito Sans',sans-serif", fontSize: 13, fontWeight: 600,
+                  textAlign: "left", minHeight: 150,
+                  display: "flex", flexDirection: "column", justifyContent: "space-between",
+                  opacity: isDownloading ? 0.6 : 1,
+                }}>
+                <div>
+                  <div style={{fontSize:28,marginBottom:10}}>📊</div>
+                  <div style={{color:C.text,marginBottom:4,fontSize:14}}>Lista de Ativos</div>
+                  <div style={{color:C.muted,fontSize:11,fontWeight:400,lineHeight:1.5}}>Excel completo (.xlsx) com todos os ativos verificados</div>
+                </div>
+                <div style={{marginTop:10,fontSize:11,fontWeight:700,letterSpacing:"0.05em"}}>
+                  {isDownloading ? (
+                    <span style={{color:C.gold}}>
+                      <span style={{display:"inline-block",width:10,height:10,border:"2px solid rgba(191,148,71,.3)",borderTopColor:C.gold,borderRadius:"50%",animation:"spin .8s linear infinite",marginRight:6,verticalAlign:"middle"}}/>
+                      Gerando...
+                    </span>
+                  ) : wasDownloaded ? (
+                    <span style={{color:C.green}}>✓ Baixado</span>
+                  ) : (
+                    <span style={{color:C.gold}}>↓ Baixar</span>
+                  )}
+                </div>
+              </button>
+            );
+          })()}
+
+          {/* Card 2: Selecionar Estratégias — leva ao formulário */}
+          <button className="bg"
+            onClick={()=>{
+              // Inicializa como Set vazio (advogado vai marcar opt-in).
+              // Se já abriu antes e voltou, preserva a seleção atual.
+              if (selectedStrategies === null) setSelectedStrategies(new Set());
+              setStep("strategies");
+            }}
+            style={{
+              background: selectedStrategies !== null && selectedStrategies.size > 0
+                ? "rgba(191,148,71,.06)" : C.card,
+              color: C.text, padding: "22px 18px", borderRadius: 12,
+              border: `1.5px solid ${selectedStrategies !== null && selectedStrategies.size > 0 ? C.gold : C.border}`,
+              cursor: "pointer",
+              fontFamily: "'Nunito Sans',sans-serif", fontSize: 13, fontWeight: 600,
+              textAlign: "left", minHeight: 150,
+              display: "flex", flexDirection: "column", justifyContent: "space-between",
+            }}>
+            <div>
+              <div style={{fontSize:28,marginBottom:10}}>📋</div>
+              <div style={{color:C.text,marginBottom:4,fontSize:14}}>Alternativas de Planejamento</div>
+              <div style={{color:C.muted,fontSize:11,fontWeight:400,lineHeight:1.5}}>Selecione as estratégias patrimoniais e sucessórias para incluir no PPT</div>
+            </div>
+            <div style={{marginTop:10,fontSize:11,fontWeight:700,letterSpacing:"0.05em",color:C.gold}}>
+              {selectedStrategies !== null && selectedStrategies.size > 0
+                ? `✓ ${selectedStrategies.size} ${selectedStrategies.size===1?"selecionada":"selecionadas"} · Editar →`
+                : "→ Selecionar estratégias"}
+            </div>
+          </button>
+        </div>
+
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 20px",marginBottom:20,textAlign:"left"}}>
+          <p style={{color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.15em",marginBottom:4}}>CLIENTE</p>
+          <p style={{fontFamily:"'Cormorant Garamond',serif",fontSize:17,fontWeight:600,color:C.text}}>{data?.client||"—"}</p>
+          <p style={{color:C.muted,fontSize:11,marginTop:2}}>
+            {data?.year} · {data?.groups?.reduce((a,g)=>a+g.items.length,0)} ativos ·{" "}
+            {new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL",minimumFractionDigits:2,maximumFractionDigits:2}).format(data?.groups?.reduce((a,g)=>a+g.items.reduce((b,i)=>b+(i.dirpf||0),0),0)||0)}
+          </p>
+        </div>
+
+        {error&&<div style={{background:"rgba(224,82,82,.1)",border:`1px solid ${C.red}`,borderRadius:8,padding:"10px 14px",color:C.red,fontSize:12,marginBottom:16,textAlign:"left"}}>⚠ {error}</div>}
+
+        <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+          <button className="gh" style={{background:"transparent",color:C.muted,padding:"11px 24px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>setStep("verify")}>← Voltar para verificação</button>
+          <button className="gh" style={{background:"transparent",color:C.muted,padding:"11px 24px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>{setStep("upload");setData(null);setFiles({dirpf:null,dcbe:null,certidao:null,familia:null,alteracoes:null,societario_br:null,societario_off:null,lei_14754:null,imoveis:null,emprestimos:null,doacoes:null,previdencia:null});setSelectedStrategies(null);setError("");setDownloadStatus({});}}>Novo Cliente</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ──────────────────────────────────────────────────────────────────
+  // step="strategies" — Formulário de seleção das estratégias.
+  // 2 colunas: Patrimonial (azul) + Sucessório (gold). Cada seção tem
+  // um checkbox "Selecionar todos da seção", e estratégias individuais.
+  // ──────────────────────────────────────────────────────────────────
+  if(step==="strategies"){
+    // Selection state defaults to empty Set when entering (lawyer opts in)
+    const sel = selectedStrategies || new Set();
+
+    const toggleOne = (name) => {
+      const next = new Set(sel);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      setSelectedStrategies(next);
+    };
+    const toggleSection = (items) => {
+      const next = new Set(sel);
+      const allChecked = items.every(n => next.has(n));
+      if (allChecked) items.forEach(n => next.delete(n));
+      else items.forEach(n => next.add(n));
+      setSelectedStrategies(next);
+    };
+    const selectAll = () => setSelectedStrategies(new Set(ALL_STRATEGY_NAMES));
+    const clearAll  = () => setSelectedStrategies(new Set());
+
+    const renderColumn = (title, theme, accentColor, tintBg, strategies) => (
+      <div style={{flex:1,minWidth:340}}>
+        <div style={{background:tintBg,borderRadius:10,padding:"12px 16px",marginBottom:10,borderLeft:`3px solid ${accentColor}`}}>
+          <p style={{color:C.muted,fontSize:9,fontWeight:700,letterSpacing:"0.18em",marginBottom:2}}>{theme}</p>
+          <p style={{color:accentColor,fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:600,lineHeight:1.1}}>{title}</p>
+        </div>
+        {strategies.map(([secName, items]) => {
+          const nChecked = items.filter(n => sel.has(n)).length;
+          const allChecked = nChecked === items.length;
+          const someChecked = nChecked > 0 && !allChecked;
+          return (
+            <div key={secName} style={{marginBottom:14,background:C.card,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
+              {/* Section header — clickable checkbox toggles whole section */}
+              <div onClick={()=>toggleSection(items)}
+                style={{padding:"10px 14px",background:C.surface,borderBottom:`1px solid ${C.border}`,cursor:"pointer",display:"flex",alignItems:"center",gap:10,userSelect:"none"}}>
+                <span style={{
+                  width:16,height:16,borderRadius:4,
+                  border:`1.5px solid ${allChecked || someChecked ? accentColor : C.dim}`,
+                  background: allChecked ? accentColor : (someChecked ? accentColor+"55" : "transparent"),
+                  display:"inline-flex",alignItems:"center",justifyContent:"center",
+                  color:"#fff",fontSize:10,fontWeight:900,flexShrink:0,
+                }}>{allChecked ? "✓" : someChecked ? "–" : ""}</span>
+                <span style={{flex:1,color:C.text,fontSize:11,fontWeight:700,letterSpacing:"0.05em"}}>{secName.toUpperCase()}</span>
+                <span style={{color:C.muted,fontSize:10}}>{nChecked}/{items.length}</span>
+              </div>
+              {/* Strategies in this section */}
+              {items.map(name => {
+                const checked = sel.has(name);
+                return (
+                  <label key={name}
+                    onClick={()=>toggleOne(name)}
+                    style={{display:"flex",alignItems:"flex-start",gap:10,padding:"8px 14px 8px 36px",cursor:"pointer",borderTop:`1px solid ${C.borderLight}`,userSelect:"none",background:checked?"rgba(191,148,71,.04)":"transparent"}}>
+                    <span style={{
+                      width:14,height:14,borderRadius:3,
+                      border:`1.5px solid ${checked ? accentColor : C.dim}`,
+                      background: checked ? accentColor : "transparent",
+                      display:"inline-flex",alignItems:"center",justifyContent:"center",
+                      color:"#fff",fontSize:9,fontWeight:900,flexShrink:0,marginTop:1,
+                    }}>{checked ? "✓" : ""}</span>
+                    <span style={{color:checked?C.text:C.muted,fontSize:11.5,lineHeight:1.45,fontWeight:checked?600:400}}>{name}</span>
+                  </label>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    );
+
+    return (
+      <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Nunito Sans',sans-serif",color:C.text,padding:"24px 20px"}} className="fi">
+        <style>{style}</style>
+        <div style={{maxWidth:1100,margin:"0 auto"}}>
+          {/* Header */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20,flexWrap:"wrap",gap:12}}>
+            <div>
+              <p style={{color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.2em",marginBottom:4}}>SELEÇÃO DE ESTRATÉGIAS · {data?.client||"—"}</p>
+              <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:600,color:C.text}}>Alternativas de Planejamento</h1>
+              <p style={{color:C.muted,fontSize:12,marginTop:4,maxWidth:680,lineHeight:1.5}}>
+                Marque as estratégias que devem entrar na apresentação. Cada estratégia selecionada aparece como hyperlink nos slides 2-3 (sob cada categoria patrimonial) e ganha uma página detalhada nos índices.
+              </p>
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+              <span style={{
+                background: sel.size>0 ? "rgba(191,148,71,.12)" : C.surface,
+                color: sel.size>0 ? C.gold : C.muted,
+                border: `1px solid ${sel.size>0 ? C.gold : C.border}`,
+                borderRadius:999,padding:"6px 14px",fontSize:11,fontWeight:700,
+              }}>
+                {sel.size} de {ALL_STRATEGY_NAMES.length} selecionadas
+              </span>
+              <button onClick={selectAll} style={{background:"transparent",color:C.muted,padding:"7px 13px",borderRadius:6,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"inherit",fontSize:11}}>Selecionar todas</button>
+              <button onClick={clearAll}  style={{background:"transparent",color:C.muted,padding:"7px 13px",borderRadius:6,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"inherit",fontSize:11}}>Limpar</button>
+            </div>
+          </div>
+
+          {/* Two columns: Patrimonial + Sucessório */}
+          <div style={{display:"flex",gap:18,marginBottom:24,flexWrap:"wrap"}}>
+            {renderColumn(
+              "Planejamento Patrimonial",
+              "A. PATRIMONIAL",
+              "#1F4E79",  // STRAT_BLUE_DARK from deck_builder
+              "rgba(31,78,121,.06)",
+              PATRIMONIAL_STRATEGIES,
+            )}
+            {renderColumn(
+              "Planejamento Sucessório",
+              "B. SUCESSÓRIO",
+              "#9C7A00",  // STRAT_YELLOW_DARK from deck_builder
+              "rgba(156,122,0,.06)",
+              SUCESSORIO_STRATEGIES,
+            )}
+          </div>
+
+          {/* Footer actions */}
+          {error&&<div style={{background:"rgba(224,82,82,.1)",border:`1px solid ${C.red}`,borderRadius:8,padding:"10px 14px",color:C.red,fontSize:12,marginBottom:14}}>⚠ {error}</div>}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,paddingBottom:32,flexWrap:"wrap"}}>
+            <button className="gh" onClick={()=>setStep("done")}
+              style={{background:"transparent",color:C.muted,padding:"11px 22px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"inherit",fontSize:13}}>← Voltar</button>
+            <div style={{display:"flex",gap:10,alignItems:"center"}}>
+              <p style={{color:C.dim,fontSize:11,fontStyle:"italic"}}>
+                {sel.size === 0
+                  ? "Nenhuma marcada — o PPT virá sem hyperlinks de estratégia."
+                  : `${sel.size} ${sel.size===1?"estratégia entrará":"estratégias entrarão"} no deck.`}
+              </p>
+              <button className="bg" onClick={()=>setStep("ppt-downloads")}
+                style={{background:C.gold,color:"#080C14",padding:"12px 28px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:13,letterSpacing:"0.04em"}}>
+                Próximo: Gerar PPT →
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // step="ppt-downloads" — Tela 3 de download. Três botões de PPT
+  // (Organograma Patrimonial, Organograma Familiar, Apresentação PPT).
+  // A Apresentação completa respeita as estratégias selecionadas; os
+  // organogramas são slides isolados que não têm conteúdo de estratégia.
+  // ──────────────────────────────────────────────────────────────────
+  if(step==="ppt-downloads")return(
+    <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Nunito Sans',sans-serif",color:C.text,display:"flex",alignItems:"center",justifyContent:"center",padding:"32px 20px"}} className="fi">
+      <style>{style}</style>
+      <div style={{width:"100%",maxWidth:780,textAlign:"center"}}>
+        <div style={{fontSize:48,marginBottom:12}}>📑</div>
+        <h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:30,fontWeight:600,color:C.text,marginBottom:8}}>Gerar Apresentações</h2>
+        <p style={{color:C.muted,fontSize:13,lineHeight:1.7,marginBottom:18}}>
+          Os arquivos abaixo respeitam as estratégias que você selecionou.
+        </p>
+
+        {/* Indicador de seleção */}
+        <div style={{display:"inline-flex",alignItems:"center",gap:8,background:selectedStrategies && selectedStrategies.size>0 ? "rgba(191,148,71,.08)" : C.surface,border:`1px solid ${selectedStrategies && selectedStrategies.size>0 ? C.gold : C.border}`,borderRadius:999,padding:"6px 16px",marginBottom:24}}>
+          <span style={{color:selectedStrategies && selectedStrategies.size>0 ? C.gold : C.muted,fontSize:11,fontWeight:700,letterSpacing:"0.05em"}}>
+            {selectedStrategies === null
+              ? "Catálogo completo (todas as estratégias)"
+              : selectedStrategies.size === 0
+                ? "Nenhuma estratégia selecionada — PPT sem hyperlinks"
+                : `${selectedStrategies.size} ${selectedStrategies.size===1?"estratégia selecionada":"estratégias selecionadas"}`}
+          </span>
+          <button onClick={()=>setStep("strategies")}
+            style={{background:"transparent",border:"none",color:C.gold,fontSize:11,fontWeight:600,cursor:"pointer",padding:0,textDecoration:"underline"}}>
+            editar
+          </button>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:24}}>
           {[
-            {kind:"excel",          icon:"📊", title:"Lista de Ativos",          sub:"Excel completo (.xlsx)"},
-            {kind:"orgPatrimonial", icon:"🏛️", title:"Organograma Patrimonial",  sub:"Slide isolado (.pptx)"},
-            {kind:"orgFamiliar",    icon:"👨‍👩‍👧‍👦", title:"Organograma Familiar",     sub:"Slide isolado (.pptx)"},
-            {kind:"deck",           icon:"📑", title:"Apresentação PPT",         sub:"6 slides — capa, composição, detalhamento, organogramas"},
+            {kind:"orgPatrimonial", icon:"🏛️", title:"Organograma Patrimonial", sub:"Slide isolado (.pptx)"},
+            {kind:"orgFamiliar",    icon:"👨‍👩‍👧‍👦", title:"Organograma Familiar", sub:"Slide isolado (.pptx)"},
+            {kind:"deck",           icon:"📑", title:"Apresentação Completa", sub:"Deck com capa, composição BR/exterior, organogramas e estratégias selecionadas"},
           ].map(({kind,icon,title,sub}) => {
             const isDownloading = downloadingKind === kind;
             const wasDownloaded = !!downloadStatus[kind];
@@ -1709,25 +2046,18 @@ function App(){
                 onClick={()=>downloadOne(kind)}
                 style={{
                   background: wasDownloaded ? "rgba(60,174,122,.06)" : C.card,
-                  color: C.text,
-                  padding: "22px 18px",
-                  borderRadius: 12,
+                  color: C.text, padding: "20px 14px", borderRadius: 12,
                   border: `1.5px solid ${wasDownloaded ? C.green : C.border}`,
                   cursor: isDownloading ? "wait" : "pointer",
-                  fontFamily: "'Nunito Sans',sans-serif",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  textAlign: "left",
-                  minHeight: 140,
-                  display: "flex",
-                  flexDirection: "column",
-                  justifyContent: "space-between",
+                  fontFamily: "'Nunito Sans',sans-serif", fontSize: 13, fontWeight: 600,
+                  textAlign: "left", minHeight: 160,
+                  display: "flex", flexDirection: "column", justifyContent: "space-between",
                   opacity: isDownloading ? 0.6 : 1,
                 }}>
                 <div>
-                  <div style={{fontSize:28,marginBottom:10}}>{icon}</div>
-                  <div style={{color:C.text,marginBottom:4,fontSize:14}}>{title}</div>
-                  <div style={{color:C.muted,fontSize:11,fontWeight:400,lineHeight:1.5}}>{sub}</div>
+                  <div style={{fontSize:26,marginBottom:10}}>{icon}</div>
+                  <div style={{color:C.text,marginBottom:4,fontSize:13}}>{title}</div>
+                  <div style={{color:C.muted,fontSize:10.5,fontWeight:400,lineHeight:1.5}}>{sub}</div>
                 </div>
                 <div style={{marginTop:10,fontSize:11,fontWeight:700,letterSpacing:"0.05em"}}>
                   {isDownloading ? (
@@ -1758,8 +2088,9 @@ function App(){
         {error&&<div style={{background:"rgba(224,82,82,.1)",border:`1px solid ${C.red}`,borderRadius:8,padding:"10px 14px",color:C.red,fontSize:12,marginBottom:16,textAlign:"left"}}>⚠ {error}</div>}
 
         <div style={{display:"flex",gap:10,justifyContent:"center"}}>
-          <button className="gh" style={{background:"transparent",color:C.muted,padding:"11px 24px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>setStep("verify")}>← Voltar para verificação</button>
-          <button className="gh" style={{background:"transparent",color:C.muted,padding:"11px 24px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>{setStep("upload");setData(null);setFiles({dirpf:null,dcbe:null,certidao:null,familia:null,alteracoes:null,societario_br:null,societario_off:null,lei_14754:null,imoveis:null,emprestimos:null,doacoes:null,previdencia:null});setError("");setDownloadStatus({});}}>Novo Cliente</button>
+          <button className="gh" style={{background:"transparent",color:C.muted,padding:"11px 24px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>setStep("strategies")}>← Editar estratégias</button>
+          <button className="gh" style={{background:"transparent",color:C.muted,padding:"11px 24px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>setStep("done")}>Arquivos disponíveis</button>
+          <button className="gh" style={{background:"transparent",color:C.muted,padding:"11px 24px",borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:13}} onClick={()=>{setStep("upload");setData(null);setFiles({dirpf:null,dcbe:null,certidao:null,familia:null,alteracoes:null,societario_br:null,societario_off:null,lei_14754:null,imoveis:null,emprestimos:null,doacoes:null,previdencia:null});setSelectedStrategies(null);setError("");setDownloadStatus({});}}>Novo Cliente</button>
         </div>
       </div>
     </div>
