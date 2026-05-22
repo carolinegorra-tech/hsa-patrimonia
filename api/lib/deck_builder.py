@@ -21643,20 +21643,46 @@ def _wire_strategy_hyperlinks(prs, indice_patrimonial, indice_sucessorio, strate
             add_internal_link(sl._strategy_back_run, target)
 
 
-def _append_strategy_slides(prs):
+def _append_strategy_slides(prs, selected_strategies=None):
     """Adds index + sketch slides. Returns (indice_p, indice_s, strategy_slides)
     so the caller can wire additional hyperlinks (e.g. from the redesigned
-    slide 2)."""
-    # Indices first so they exist for back-links
-    indice_p = _add_indice_slide(prs, "Planejamento Patrimonial", STRATEGY_BLUE, PATRIMONIAL_STRATEGIES)
-    indice_s = _add_indice_slide(prs, "Planejamento Sucessório",  STRATEGY_YELLOW, SUCESSORIO_STRATEGIES)
+    slide 2).
 
+    selected_strategies: optional set/iterable of strategy names. When
+    provided, ONLY those strategies appear in the indice tables and get a
+    sketch slide. When None, full default catalog is used (backwards
+    compatible with old callers).
+    """
+    # Normalise to a set for fast lookup; None means "no filter applied".
+    sel = set(selected_strategies) if selected_strategies is not None else None
+
+    def _filter_by_sel(strategies_def):
+        """Drop strategies not in `sel`; drop sections that end up empty."""
+        if sel is None:
+            return strategies_def
+        out = []
+        for sec_name, items in strategies_def:
+            kept = [s for s in items if s in sel]
+            if kept:
+                out.append((sec_name, kept))
+        return out
+
+    pat_filtered = _filter_by_sel(PATRIMONIAL_STRATEGIES)
+    suc_filtered = _filter_by_sel(SUCESSORIO_STRATEGIES)
+
+    # Indices first so they exist for back-links. The indice tables only show
+    # what's actually selected (or everything when selection is None).
+    indice_p = _add_indice_slide(prs, "Planejamento Patrimonial", STRATEGY_BLUE, pat_filtered)
+    indice_s = _add_indice_slide(prs, "Planejamento Sucessório",  STRATEGY_YELLOW, suc_filtered)
+
+    # Sketch slides — one per selected strategy. Unselected strategies don't
+    # get a sketch slide (no orphan slides in the output).
     strategy_slides = {}
-    for sub_name, items in PATRIMONIAL_STRATEGIES:
+    for sub_name, items in pat_filtered:
         for sname in items:
             sl = _add_strategy_sketch_slide(prs, sname, STRATEGY_BLUE, "Planejamento Patrimonial")
             strategy_slides[sname] = sl
-    for sub_name, items in SUCESSORIO_STRATEGIES:
+    for sub_name, items in suc_filtered:
         for sname in items:
             sl = _add_strategy_sketch_slide(prs, sname, STRATEGY_YELLOW, "Planejamento Sucessório")
             strategy_slides[sname] = sl
@@ -21747,7 +21773,8 @@ def short_strategy(s, max_len=42):
 def _draw_redesigned_slide2(sl, prs_w, prs_h, sorted_items, total,
                             indice_p, indice_s, strategy_slides,
                             outros_components=None,
-                            jurisdiction='Brasil'):
+                            jurisdiction='Brasil',
+                            selected_strategies=None):
     """Draw the redesigned slide 2 (or 3): donut centered + up to 6 callouts
     around it with category name, value, percentage, and 0–2 strategy
     hyperlinks each. Two big bottom buttons link to the Patrimonial /
@@ -22251,9 +22278,15 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, sorted_items, total,
                     if s_tuple[0] not in seen:
                         seen.add(s_tuple[0])
                         pooled.append(s_tuple)
-            strategies = pooled[:2]
+            strategies = pooled
         else:
-            strategies = CATEGORY_STRATEGIES.get(name, [])[:2]
+            strategies = CATEGORY_STRATEGIES.get(name, [])
+        # Honour the lawyer's strategy selection from the planning form.
+        # When set, only the strategies they checked appear under callouts.
+        # When None, default catalog behaviour (show up to 2 per category).
+        if selected_strategies is not None:
+            strategies = [(s, t) for (s, t) in strategies if s in selected_strategies]
+        strategies = strategies[:2]
         for j, (sname, theme) in enumerate(strategies):
             s_y = cy + CARD_H + Inches(0.04) + j * Inches(0.20)
             stx_shape = sl.shapes.add_textbox(cx, s_y, CALLOUT_W, Inches(0.20))
@@ -23069,7 +23102,17 @@ def build_deck(data, output_path):
     # new slide 6 we add will collide with the template's existing slide6.xml,
     # producing two relationships pointing to the same XML file → PowerPoint
     # "needs repair" warning and broken layout.
-    indice_p, indice_s, strategy_slides = _append_strategy_slides(prs)
+    #
+    # The lawyer's planning-form selection (from app.jsx) arrives in
+    # `data['selected_strategies']` as a list of strategy names. We honour
+    # that selection here — only those strategies get a sketch slide + an
+    # entry in the indice tables. Absent/None = full catalog (legacy).
+    selected_strategies_raw = data.get('selected_strategies')
+    selected_strategies = (set(selected_strategies_raw)
+                           if selected_strategies_raw is not None else None)
+    indice_p, indice_s, strategy_slides = _append_strategy_slides(
+        prs, selected_strategies=selected_strategies,
+    )
 
     # ── Now safely remove any extra slides beyond Composição-BR (slide 2)
     # and Composição-Exterior (slide 3). The template has slide 4 etc. that
@@ -23086,6 +23129,7 @@ def build_deck(data, output_path):
         indice_p, indice_s, strategy_slides,
         BR_OUTROS_COMPONENTS,
         jurisdiction='Brasil',
+        selected_strategies=selected_strategies,
     )
 
     # ── Repurpose slide 3 as Composição — EXTERIOR ──────────────────────────
@@ -23097,6 +23141,7 @@ def build_deck(data, output_path):
         indice_p, indice_s, strategy_slides,
         OFF_OUTROS_COMPONENTS,
         jurisdiction='Exterior',
+        selected_strategies=selected_strategies,
     )
 
     # ── Remove slide 4 (was PARTICIPAÇÕES SOCIETÁRIAS — twin bar-chart
