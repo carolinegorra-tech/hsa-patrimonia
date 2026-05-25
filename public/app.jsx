@@ -811,28 +811,47 @@ function App(){
   const [downloadingKind, setDownloadingKind] = useState(null);
 
   const KIND_TO_URL = {
-    excel:           "/api/build/excel",
-    deck:            "/api/build/deck",
-    orgPatrimonial:  "/api/build/orgchart-patrimonial",
-    orgFamiliar:     "/api/build/orgchart-familiar",
+    excel:             "/api/build/excel",
+    deck:              "/api/build/deck",
+    orgPatrimonial:    "/api/build/orgchart-patrimonial",
+    orgFamiliar:       "/api/build/orgchart-familiar",
+    documentChecklist: "/api/build/document-checklist",
   };
   const KIND_FALLBACK_NAME = {
-    excel:          "lista_ativos.xlsx",
-    deck:           "patrimonio.pptx",
-    orgPatrimonial: "organograma_patrimonial.pptx",
-    orgFamiliar:    "organograma_familiar.pptx",
+    excel:             "lista_ativos.xlsx",
+    deck:              "patrimonio.pptx",
+    orgPatrimonial:    "organograma_patrimonial.pptx",
+    orgFamiliar:       "organograma_familiar.pptx",
+    documentChecklist: "lista_documentos.docx",
   };
+
+  // Helper: snapshot atual do estado de cada um dos 12 documentos. O endpoint
+  // /api/build/document-checklist espera esse dict no payload.
+  const buildFileStatus = () => Object.fromEntries(
+    ALL_DOCS_CHECKLIST.map(d => [d.key, !!files[d.key]])
+  );
 
   const downloadOne = async (kind) => {
     setDownloadingKind(kind); setError("");
     try {
-      // Build payload: base data + selected_strategies when the lawyer
-      // picked some on the planning form. Backend (deck_builder) only
-      // uses this for the full-deck "deck" kind; harmless on others.
-      // null = lawyer never opened the form → backend uses full catalog.
-      const payload = selectedStrategies !== null
-        ? {...data, selected_strategies: Array.from(selectedStrategies)}
-        : data;
+      // Constrói o payload conforme o tipo de arquivo solicitado.
+      let payload;
+      if (kind === "documentChecklist") {
+        // Pode ser chamado MESMO antes de processar PDFs (na tela de upload),
+        // então `data` pode ser null. Precisamos apenas do nome do cliente
+        // (se disponível) e do snapshot de status dos 12 docs.
+        payload = {
+          client: data?.client || "",
+          file_status: buildFileStatus(),
+        };
+      } else {
+        // Demais kinds (Excel, PPT) usam o `data` já verificado.
+        // Inclui `selected_strategies` quando o advogado preencheu o
+        // formulário de planejamento (só relevante pro deck completo).
+        payload = selectedStrategies !== null
+          ? {...data, selected_strategies: Array.from(selectedStrategies)}
+          : data;
+      }
       const r = await fetch(KIND_TO_URL[kind], {
         method: "POST",
         headers: {"Content-Type":"application/json", ...authHeaders()},
@@ -1228,6 +1247,40 @@ function App(){
                   Faltam {missing.length} {missing.length===1?"documento":"documentos"}: {missing.map(m=>m.short).join(" · ")}
                 </p>
               )}
+              {/* Download do checklist preliminar — disponível antes mesmo de
+                  processar os PDFs, pra cobrar do cliente o que ainda falta.
+                  Quando os 12 docs chegarem, o mesmo botão segue funcionando
+                  (vira a versão "completa"). */}
+              <div style={{display:"flex",justifyContent:"flex-end",marginTop:10,paddingTop:10,borderTop:`1px dashed ${C.borderLight}`}}>
+                <button
+                  onClick={()=>downloadOne("documentChecklist")}
+                  disabled={downloadingKind === "documentChecklist"}
+                  title="Baixa o Word com 'Concluído'/'Pendente' ao lado de cada um dos 12 documentos. Útil pra mandar pro cliente cobrando o que falta."
+                  style={{
+                    background: "transparent",
+                    color: C.gold,
+                    border: `1px solid ${C.gold}`,
+                    borderRadius: 6,
+                    padding: "6px 14px",
+                    cursor: downloadingKind === "documentChecklist" ? "wait" : "pointer",
+                    fontFamily: "'Nunito Sans',sans-serif",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    letterSpacing: "0.03em",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}>
+                  {downloadingKind === "documentChecklist" ? (
+                    <>
+                      <span style={{width:10,height:10,border:"2px solid rgba(191,148,71,.3)",borderTopColor:C.gold,borderRadius:"50%",animation:"spin .8s linear infinite",display:"inline-block"}}/>
+                      Gerando...
+                    </>
+                  ) : (
+                    <>📄 Baixar checklist em Word</>
+                  )}
+                </button>
+              </div>
             </div>
           );
         })()}
@@ -2126,11 +2179,12 @@ function App(){
           </button>
         </div>
 
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:24}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:24}}>
           {[
-            {kind:"orgPatrimonial", icon:"🏛️", title:"Organograma Patrimonial", sub:"Slide isolado (.pptx)"},
-            {kind:"orgFamiliar",    icon:"👨‍👩‍👧‍👦", title:"Organograma Familiar", sub:"Slide isolado (.pptx)"},
-            {kind:"deck",           icon:"📑", title:"Apresentação Completa", sub:"Deck com capa, composição BR/exterior, organogramas e estratégias selecionadas"},
+            {kind:"orgPatrimonial",    icon:"🏛️", title:"Organograma Patrimonial", sub:"Slide isolado (.pptx)"},
+            {kind:"orgFamiliar",       icon:"👨‍👩‍👧‍👦", title:"Organograma Familiar", sub:"Slide isolado (.pptx)"},
+            {kind:"deck",              icon:"📑", title:"Apresentação Completa", sub:"Deck com capa, composição BR/exterior, organogramas e estratégias selecionadas"},
+            {kind:"documentChecklist", icon:"📄", title:"Lista de Documentos", sub:"Word (.docx) com status 'Concluído'/'Pendente' ao lado de cada um dos 12 itens"},
           ].map(({kind,icon,title,sub}) => {
             const isDownloading = downloadingKind === kind;
             const wasDownloaded = !!downloadStatus[kind];
