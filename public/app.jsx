@@ -665,8 +665,14 @@ function App(){
   const [loadMsg,setLoadMsg]=useState("");
   const [error,setError]=useState("");
   const [password,setPassword]=useState(()=>sessionStorage.getItem("hsa_pwd")||"");
-  const [authRequired,setAuthRequired]=useState(false);
+  // Anthropic API key — user-provided, never stored on the server. Lives
+  // in sessionStorage so each browser/user has their own key, isolating
+  // usage costs (the firm pays nothing collectively; each lawyer's API
+  // bill reflects their own usage).
+  const [apiKey,setApiKey]=useState(()=>sessionStorage.getItem("anthropic_key")||"");
   const [pendingPwd,setPendingPwd]=useState("");
+  const [pendingApiKey,setPendingApiKey]=useState("");
+  const [showApiKeyModal,setShowApiKeyModal]=useState(false);
   // When true, the asset list overrides the jurisdiction-tab view and shows
   // Brasil + Offshore stacked, each with the DIRPF total (in BRL) in the
   // header. Triggered by clicking the "Total DIRPF" KPI card.
@@ -678,32 +684,52 @@ function App(){
   const dirpfRef=useRef();
   const dcbeRef=useRef();
 
-  // On mount: probe /api/health to learn if auth is required
+  // On mount: senha é sempre necessária agora. Se já temos no sessionStorage
+  // (refresh da página) vamos direto pro upload; caso contrário pede login.
   useEffect(()=>{
-    fetch("/api/health").then(r=>r.json()).then(h=>{
-      const needs = !!h.auth_enabled;
-      setAuthRequired(needs);
-      if (needs && !password) setStep("login");
-      else setStep("upload");
-    }).catch(()=>{ setStep("upload"); });
+    if (password) setStep("upload");
+    else setStep("login");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
-  const authHeaders = () => password ? {"X-HSA-Password": password} : {};
+  // Headers que vão em toda requisição autenticada. A senha autentica o
+  // usuário no servidor; a API key viaja junto pra ser usada na chamada
+  // upstream pra Anthropic (só o /api/extract precisa dela na prática,
+  // mas mandar sempre simplifica o código).
+  const authHeaders = () => {
+    const h = {};
+    if (password) h["X-HSA-Password"] = password;
+    if (apiKey)   h["X-Anthropic-Api-Key"] = apiKey;
+    return h;
+  };
 
   const tryLogin = async () => {
     setError("");
-    // Probe an authed endpoint with the candidate password
+    // Validação local básica da API key antes de bater no servidor.
+    if (!pendingApiKey.trim()) {
+      setError("Forneça sua API key da Anthropic.");
+      return;
+    }
+    if (!pendingApiKey.trim().startsWith("sk-ant-")) {
+      setError("API key inválida. Deve começar com 'sk-ant-'.");
+      return;
+    }
+    // Probe um endpoint autenticado com a senha candidata.
     const r = await fetch("/api/build/deck",{
       method:"POST",
       headers:{"Content-Type":"application/json","X-HSA-Password":pendingPwd},
       body: JSON.stringify({client:"_probe_",groups:[]})
     });
     if (r.status === 401) { setError("Senha incorreta."); return; }
-    // Anything other than 401 means the password was accepted (even a 400/500 from empty data)
+    // Qualquer coisa fora 401 significa que a senha passou (mesmo um 400/500
+    // do payload vazio). Salvamos ambos os credenciais em sessionStorage —
+    // ficam disponíveis na aba atual, somem ao fechar o navegador.
     sessionStorage.setItem("hsa_pwd", pendingPwd);
+    sessionStorage.setItem("anthropic_key", pendingApiKey.trim());
     setPassword(pendingPwd);
+    setApiKey(pendingApiKey.trim());
     setPendingPwd("");
+    setPendingApiKey("");
     setStep("upload");
   };
 
@@ -722,8 +748,30 @@ function App(){
         res = await fetch("/api/extract",{method:"POST", body:fd, headers: authHeaders()});
       } catch(e){ throw new Error("Falha na requisição: "+e.message); }
       if(res.status === 401){
+        // Senha inválida — session expirou ou alguém limpou. Volta pro login
+        // mas preserva a API key (não tem motivo pra perder ela junto).
         sessionStorage.removeItem("hsa_pwd"); setPassword(""); setStep("login");
         throw new Error("Sessão expirada. Faça login novamente.");
+      }
+      // 400 com mensagem sobre API key = chave do usuário rejeitada pelo
+      // nosso validador. Volta pro login mantendo a senha.
+      if(res.status === 400){
+        const probe = await res.clone().text();
+        if (/API key|sk-ant-|api.key/i.test(probe)) {
+          sessionStorage.removeItem("anthropic_key"); setApiKey("");
+          setStep("login");
+          throw new Error("API key inválida. Refaça login com uma chave válida da Anthropic.");
+        }
+      }
+      // 502 da Anthropic com erro 401 dentro = chave do usuário sem créditos
+      // ou revogada. Mesma coisa: volta pro login pedindo nova key.
+      if(res.status === 502){
+        const probe = await res.clone().text();
+        if (/anthropic.*401|invalid.*api.key|authentication/i.test(probe)) {
+          sessionStorage.removeItem("anthropic_key"); setApiKey("");
+          setStep("login");
+          throw new Error("Sua API key da Anthropic foi rejeitada (sem créditos? revogada?). Refaça login.");
+        }
       }
       const body = await res.text();
       if(!res.ok){
@@ -1060,9 +1108,24 @@ function App(){
         : activeGrps.filter(g => g.name === activeCat));
 
   if(step==="upload")return(
-    <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Nunito Sans',sans-serif",color:C.text,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"32px 20px"}}>
+    <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Nunito Sans',sans-serif",color:C.text,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"32px 20px",position:"relative"}}>
       <style>{style}</style>
       <ChooseSessionModal fresh={pendingFresh} saved={pendingSaved} onPick={handlePickSession} onCancel={handleCancelSession}/>
+      {/* Logout discreto no canto — limpa senha + API key e volta pro login.
+          Útil pra trocar de usuário (cada um tem sua key) ou refrescar uma
+          chave que expirou. */}
+      <button onClick={()=>{
+          if(confirm("Sair e limpar senha + API key deste navegador?")){
+            sessionStorage.removeItem("hsa_pwd");
+            sessionStorage.removeItem("anthropic_key");
+            setPassword(""); setApiKey("");
+            setStep("login");
+          }
+        }}
+        title="Sair / trocar API key"
+        style={{position:"absolute",top:18,right:22,background:"transparent",color:C.muted,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 12px",cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontSize:10,letterSpacing:"0.05em"}}>
+        ⎋ Sair
+      </button>
       <div style={{width:"100%",maxWidth:880}}>
         <div style={{textAlign:"center",marginBottom:28}}>
           <div style={{display:"inline-flex",alignItems:"center",gap:8,background:C.surface,border:`1px solid ${C.border}`,borderRadius:20,padding:"5px 16px",marginBottom:20}}>
@@ -1728,8 +1791,8 @@ function App(){
   if(step==="login") return (
     <div style={{background:C.bg,minHeight:"100vh",fontFamily:"'Nunito Sans',sans-serif",color:C.text,display:"flex",alignItems:"center",justifyContent:"center",padding:"32px 20px"}}>
       <style>{style}</style>
-      <div style={{width:"100%",maxWidth:380}}>
-        <div style={{textAlign:"center",marginBottom:28}}>
+      <div style={{width:"100%",maxWidth:440}}>
+        <div style={{textAlign:"center",marginBottom:24}}>
           <div style={{display:"inline-flex",alignItems:"center",gap:8,background:C.surface,border:`1px solid ${C.border}`,borderRadius:20,padding:"5px 16px",marginBottom:18}}>
             <div style={{width:5,height:5,borderRadius:"50%",background:C.gold}} className="pu"/>
             <span style={{color:C.muted,fontSize:10,letterSpacing:"0.2em",fontWeight:700}}>HSA ADVOGADOS · ACESSO RESTRITO</span>
@@ -1737,16 +1800,47 @@ function App(){
           <h1 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:32,fontWeight:600,color:C.text,lineHeight:1.1}}>
             <span style={{color:C.gold,fontStyle:"italic"}}>Patrimon.IA</span>
           </h1>
-          <p style={{color:C.muted,fontSize:12,marginTop:10}}>Insira a senha do escritório para continuar.</p>
+          <p style={{color:C.muted,fontSize:12,marginTop:10,lineHeight:1.6}}>Insira a senha do escritório e sua API key da Anthropic para continuar.</p>
         </div>
-        <input
-          type="password" autoFocus
-          value={pendingPwd}
-          onChange={e=>setPendingPwd(e.target.value)}
-          onKeyDown={e=>{if(e.key==="Enter")tryLogin();}}
-          placeholder="Senha"
-          style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"13px 16px",color:C.text,fontSize:14,marginBottom:12,fontFamily:"'Nunito Sans',sans-serif"}}
-        />
+
+        {/* Senha do escritório */}
+        <label style={{display:"block",marginBottom:14}}>
+          <span style={{display:"block",color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.15em",marginBottom:5}}>SENHA DO ESCRITÓRIO</span>
+          <input
+            type="password" autoFocus
+            value={pendingPwd}
+            onChange={e=>setPendingPwd(e.target.value)}
+            onKeyDown={e=>{if(e.key==="Enter")tryLogin();}}
+            placeholder="••••••••"
+            style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px",color:C.text,fontSize:14,fontFamily:"'Nunito Sans',sans-serif"}}
+          />
+        </label>
+
+        {/* API key — explicação + input */}
+        <label style={{display:"block",marginBottom:14}}>
+          <span style={{display:"block",color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.15em",marginBottom:5}}>SUA API KEY DA ANTHROPIC</span>
+          <input
+            type="password"
+            value={pendingApiKey}
+            onChange={e=>setPendingApiKey(e.target.value)}
+            onKeyDown={e=>{if(e.key==="Enter")tryLogin();}}
+            placeholder="sk-ant-..."
+            style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px",color:C.text,fontSize:13,fontFamily:"monospace"}}
+          />
+        </label>
+
+        {/* Explicação de onde pegar a API key */}
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px",marginBottom:14}}>
+          <p style={{color:C.text,fontSize:11,fontWeight:700,marginBottom:6}}>ℹ️ Como obter sua API key</p>
+          <ol style={{color:C.muted,fontSize:10.5,lineHeight:1.65,paddingLeft:18,margin:0}}>
+            <li>Acesse <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style={{color:C.gold,textDecoration:"underline"}}>console.anthropic.com/settings/keys</a></li>
+            <li>Crie uma conta (se ainda não tem) e adicione créditos</li>
+            <li>Clique em "Create Key" e copie a chave que começa com <code style={{background:C.bg,padding:"1px 4px",borderRadius:3,fontSize:10}}>sk-ant-...</code></li>
+            <li>Cole acima — fica salva só no seu navegador, nunca no servidor</li>
+          </ol>
+          <p style={{color:C.dim,fontSize:9.5,marginTop:8,lineHeight:1.5,fontStyle:"italic"}}>Custo médio: ~R$ 0,30 a R$ 1,00 por par de DIRPF+DCBE processado. Cada um paga sua própria fatura.</p>
+        </div>
+
         {error&&<div style={{background:"rgba(224,82,82,.1)",border:`1px solid ${C.red}`,borderRadius:8,padding:"10px 14px",color:C.red,fontSize:12,marginBottom:12}}>⚠ {error}</div>}
         <button className="bg" onClick={tryLogin}
           style={{width:"100%",background:C.gold,color:"#080C14",padding:"13px 30px",borderRadius:8,border:"none",cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif",fontWeight:700,fontSize:14,letterSpacing:"0.05em"}}>
