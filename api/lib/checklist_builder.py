@@ -1,10 +1,15 @@
 """
-checklist_builder.py — Gera o documento "Lista Inicial de Documentos" em .docx.
+checklist_builder.py — Gera um .docx simples sem deps externas.
 
-Versão LEVE (sem template embutido). Gera o documento do zero usando
-python-docx. Não tem o logo da HSA como imagem — o cabeçalho é texto
-formatado "HUMBERTO SANCHES + ASSOCIADOS". Esta versão é compatível com
-o Vercel serverless (arquivo pequeno, sem deps pesadas no import).
+Versão MÍNIMA: usa só zipfile + strings (sem python-docx, sem template
+embutido). Um .docx é só um zip com XML dentro — esta versão constrói os
+arquivos XML necessários manualmente.
+
+Vantagens:
+  - Não depende de python-docx (que pode não estar instalado no Vercel)
+  - Arquivo Python pequeno (~150 linhas)
+  - Sem template embutido (sem base64 gigante)
+  - Import muito leve (só zipfile + io da stdlib)
 
 Args do build_checklist:
   - client_name: nome completo do cliente
@@ -13,14 +18,10 @@ Args do build_checklist:
 """
 from __future__ import annotations
 
-from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
-from docx.shared import Pt, RGBColor, Cm
+import io
+import zipfile
 
 
-# 12 itens na ordem que aparecem no template original
 _ITEMS = [
     ("certidao",
      'Cópia da certidão de casamento de {NAME} ("{FIRST}") e esposa, bem como de eventual pacto antenupcial entre eles, se aplicável.'),
@@ -33,9 +34,9 @@ _ITEMS = [
     ("alteracoes",
      'Lista de alterações patrimoniais relevantes ocorridas no decorrer dos anos de 2025 e 2026 e/ou com previsão de materialização no curto/médio prazo, incluindo ativos com expectativa de recebimento.'),
     ("societario_br",
-     'Se aplicável, organograma e documentos societários (contratos sociais, estatutos, atas), balanço patrimonial mais recente e documentos que indiquem as regras de governança de sociedades investidas por {FIRST} e esposa no Brasil, e os respectivos percentuais de participação em cada veículo. Favor incluir informações sobre as atividades desempenhadas por cada sociedade (i.e., se operacional (indicar ramo de atividade), holding patrimonial, inativa etc.).'),
+     'Se aplicável, organograma e documentos societários (contratos sociais, estatutos, atas), balanço patrimonial mais recente e documentos que indiquem as regras de governança de sociedades investidas por {FIRST} e esposa no Brasil.'),
     ("societario_off",
-     'Organograma e documentos societários dos veículos offshore detidos por {FIRST} e esposa, incluindo sociedades, fundos e trusts, tais como Memorandum and Articles of Association, Register of Members, Register of Directors e Trust Deed, conforme aplicável.'),
+     'Organograma e documentos societários dos veículos offshore detidos por {FIRST} e esposa, incluindo sociedades, fundos e trusts (Memorandum and Articles of Association, Register of Members, Trust Deed).'),
     ("lei_14754",
      'Informações quanto ao tratamento tributário aplicável aos eventuais veículos controlados no exterior por {FIRST} e esposa, especificamente para fins da Lei nº 14.754/23, se aplicável.'),
     ("imoveis",
@@ -43,120 +44,127 @@ _ITEMS = [
     ("emprestimos",
      'Informações sobre eventuais empréstimos concedidos ou tomados por {FIRST} e esposa, em vigor, conforme aplicável.'),
     ("doacoes",
-     'Informações sobre eventuais doações ou heranças recebidas ou realizadas por {FIRST} e esposa, incluindo informações sobre o recolhimento do ITCMD aplicável, conforme aplicável.'),
+     'Informações sobre eventuais doações ou heranças recebidas ou realizadas por {FIRST} e esposa, incluindo ITCMD aplicável.'),
     ("previdencia",
      'Informações sobre planos de previdência privada (VGBL/PGBL) e seguros de vida detidos por {FIRST} e esposa, no Brasil e no exterior, conforme aplicável.'),
 ]
 
 
-def _set_font(run, name: str = "Calibri", size: int = 11,
-              bold: bool = False, color: tuple = (0, 0, 0)) -> None:
-    run.font.name = name
-    run.font.size = Pt(size)
-    run.font.bold = bold
-    r, g, b = color
-    run.font.color.rgb = RGBColor(r, g, b)
+def _esc(s: str) -> str:
+    return (s.replace("&", "&amp;")
+              .replace("<", "&lt;")
+              .replace(">", "&gt;")
+              .replace('"', "&quot;"))
 
 
-def _add_para(doc, text: str = "", *, align=None, space_after: int = 6,
-              font_size: int = 11, bold: bool = False,
-              color: tuple = (0, 0, 0)):
-    p = doc.add_paragraph()
-    if align is not None:
-        p.alignment = align
-    p.paragraph_format.space_after = Pt(space_after)
-    if text:
-        run = p.add_run(text)
-        _set_font(run, size=font_size, bold=bold, color=color)
-    return p
+# ── Static parts of a .docx package ──────────────────────────────────
+_CONTENT_TYPES = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>'''
+
+_RELS = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>'''
+
+_DOC_RELS = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>'''
 
 
-def build_checklist(client_name: str, file_status: dict, output_path: str) -> str:
-    """
-    Gera o checklist preenchido.
-    """
-    client_name = (client_name or "Cliente").strip()
-    name_upper = client_name.upper()
+def _para(text: str, *, bold: bool = False, size_half_pt: int = 22,
+          color: str = "000000", align: str = "left") -> str:
+    """Build a Word paragraph XML."""
+    bold_xml = '<w:b/><w:bCs/>' if bold else ''
+    align_xml = f'<w:jc w:val="{align}"/>' if align != "left" else ''
+    return (
+        f'<w:p><w:pPr>{align_xml}<w:spacing w:after="120"/></w:pPr>'
+        f'<w:r><w:rPr>{bold_xml}<w:sz w:val="{size_half_pt}"/>'
+        f'<w:color w:val="{color}"/></w:rPr>'
+        f'<w:t xml:space="preserve">{_esc(text)}</w:t></w:r></w:p>'
+    )
+
+
+def _item_para(idx: int, text: str, is_done: bool) -> str:
+    """Build a numbered item paragraph with status at the end."""
+    status_label = "Concluído" if is_done else "Pendente"
+    status_color = "2E8B57" if is_done else "C8102E"  # green / red
+    return (
+        '<w:p><w:pPr><w:spacing w:after="200"/>'
+        '<w:ind w:left="567" w:hanging="567"/></w:pPr>'
+        # number
+        f'<w:r><w:rPr><w:sz w:val="22"/></w:rPr>'
+        f'<w:t xml:space="preserve">{idx}.\t</w:t></w:r>'
+        # body text
+        f'<w:r><w:rPr><w:sz w:val="22"/></w:rPr>'
+        f'<w:t xml:space="preserve">{_esc(text)}</w:t></w:r>'
+        # status
+        f'<w:r><w:rPr><w:b/><w:bCs/><w:sz w:val="22"/>'
+        f'<w:color w:val="{status_color}"/></w:rPr>'
+        f'<w:t xml:space="preserve">  — {status_label}</w:t></w:r>'
+        '</w:p>'
+    )
+
+
+def _build_document_xml(client_name: str, file_status: dict) -> str:
+    name_upper = (client_name or "Cliente").upper().strip()
     first = name_upper.split()[0] if name_upper else "CLIENTE"
-    file_status = file_status or {}
 
-    doc = Document()
+    body_parts: list[str] = []
 
-    # ── Margens ──────────────────────────────────────────────────────
-    for section in doc.sections:
-        section.top_margin = Cm(2.5)
-        section.bottom_margin = Cm(2.5)
-        section.left_margin = Cm(3.0)
-        section.right_margin = Cm(3.0)
+    # Header
+    body_parts.append(_para("HUMBERTO SANCHES", bold=True, size_half_pt=36,
+                            color="283944", align="center"))
+    body_parts.append(_para("+ ASSOCIADOS", bold=True, size_half_pt=18,
+                            color="8E959B", align="center"))
+    body_parts.append(_para("", align="center"))
 
-    # ── Header com nome do escritório ────────────────────────────────
-    _add_para(doc, "HUMBERTO SANCHES",
-              align=WD_ALIGN_PARAGRAPH.CENTER,
-              space_after=2, font_size=18, bold=True,
-              color=(40, 57, 68))
-    _add_para(doc, "+ ASSOCIADOS",
-              align=WD_ALIGN_PARAGRAPH.CENTER,
-              space_after=20, font_size=10, bold=True,
-              color=(142, 149, 155))
+    # Title
+    body_parts.append(_para(name_upper, bold=True, size_half_pt=24, align="center"))
+    body_parts.append(_para("PLANEJAMENTO PATRIMONIAL E SUCESSÓRIO", align="center"))
+    body_parts.append(_para("LISTA INICIAL: INFORMAÇÕES / DOCUMENTAÇÃO DE SUPORTE",
+                            align="center"))
+    body_parts.append(_para(""))
 
-    # ── Título do documento ──────────────────────────────────────────
-    _add_para(doc, name_upper,
-              align=WD_ALIGN_PARAGRAPH.CENTER,
-              space_after=6, font_size=12, bold=True,
-              color=(0, 0, 0))
-    _add_para(doc, "PLANEJAMENTO PATRIMONIAL E SUCESSÓRIO",
-              align=WD_ALIGN_PARAGRAPH.CENTER,
-              space_after=2, font_size=11, bold=False,
-              color=(0, 0, 0))
-    _add_para(doc, "LISTA INICIAL: INFORMAÇÕES / DOCUMENTAÇÃO DE SUPORTE",
-              align=WD_ALIGN_PARAGRAPH.CENTER,
-              space_after=24, font_size=11, bold=False,
-              color=(0, 0, 0))
-
-    # ── Lista numerada com status ────────────────────────────────────
+    # Items
     for idx, (key, template) in enumerate(_ITEMS, start=1):
         is_done = bool(file_status.get(key, False))
         text = template.replace("{NAME}", name_upper).replace("{FIRST}", first)
+        body_parts.append(_item_para(idx, text, is_done))
 
-        p = doc.add_paragraph()
-        p.paragraph_format.space_after = Pt(12)
-        p.paragraph_format.left_indent = Cm(0.8)
-        p.paragraph_format.first_line_indent = Cm(-0.8)
+    body_parts.append(_para(""))
 
-        # Numeração
-        num_run = p.add_run(f"{idx}.\t")
-        _set_font(num_run, size=11)
+    # Section properties (page size, margins)
+    sect = (
+        '<w:sectPr>'
+        '<w:pgSz w:w="11906" w:h="16838"/>'
+        '<w:pgMar w:top="1417" w:right="1701" w:bottom="1417" w:left="1701" '
+        'w:header="708" w:footer="708" w:gutter="0"/>'
+        '</w:sectPr>'
+    )
 
-        # Texto do item
-        text_run = p.add_run(text)
-        _set_font(text_run, size=11, color=(0, 0, 0))
+    document = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body>'
+        + "".join(body_parts)
+        + sect +
+        '</w:body></w:document>'
+    )
+    return document
 
-        # Status (verde/vermelho, bold)
-        if is_done:
-            status_text = "  — Concluído"
-            status_color = (46, 139, 87)  # verde
-        else:
-            status_text = "  — Pendente"
-            status_color = (200, 16, 46)  # vermelho
 
-        status_run = p.add_run(status_text)
-        _set_font(status_run, size=11, bold=True, color=status_color)
+def build_checklist(client_name: str, file_status: dict, output_path: str) -> str:
+    """Gera o checklist .docx."""
+    file_status = file_status or {}
+    doc_xml = _build_document_xml(client_name, file_status)
 
-    # ── Footer (rodapé) ──────────────────────────────────────────────
-    doc.add_paragraph()
-    foot = doc.add_paragraph()
-    foot.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    foot.paragraph_format.space_before = Pt(20)
-    for line in [
-        "SP +55 (11) 4858-7985",
-        "hsanches@hsanches.com",
-        "www.hsanches.com",
-        "Av. Brigadeiro Faria Lima, 3200",
-        "Edifício Seculum II, 2º andar",
-        "São Paulo, SP · CEP 01451-000",
-    ]:
-        r = foot.add_run(line + "\n")
-        _set_font(r, size=9, color=(120, 120, 120))
+    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", _CONTENT_TYPES)
+        zf.writestr("_rels/.rels", _RELS)
+        zf.writestr("word/_rels/document.xml.rels", _DOC_RELS)
+        zf.writestr("word/document.xml", doc_xml)
 
-    doc.save(output_path)
     return output_path
