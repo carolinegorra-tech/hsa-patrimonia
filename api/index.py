@@ -39,7 +39,6 @@ import sys, os as _os_path
 sys.path.insert(0, _os_path.path.join(_os_path.path.dirname(__file__), "lib"))
 import deck_builder
 import excel_builder
-import checklist_builder
 
 # Senha hardcoded do escritório. Não é segredo criptográfico — é só um gate
 # pra evitar que alguém com a URL random encontre o app. Pode mudar pra
@@ -363,48 +362,4 @@ def build_orgchart_patrimonial_endpoint(body: BuildBody):
     )
 
 
-@app.post("/api/build/orgchart-familiar", dependencies=[Depends(auth)])
-def build_orgchart_familiar_endpoint(body: BuildBody):
-    data = body.model_dump()
-    try:
-        out_path = _build_single_slide(data, keep_idx=4, kind="orgchart-familiar")
-    except HTTPException:
-        raise
-    except Exception as e:
-        log.exception("build_orgchart_familiar failed")
-        raise HTTPException(status_code=500, detail=f"orgchart-familiar failed: {e}") from e
-    return FileResponse(
-        out_path,
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        filename=_safe_filename(data.get("client", ""), "ORGANOGRAMA_FAMILIAR", "pptx"),
-    )
-@app.post("/api/build/document-checklist", dependencies=[Depends(auth)])
-def build_document_checklist_endpoint(body: BuildBody):
-    """
-    Gera o documento "Lista Inicial de Documentos" da HSA preenchido com:
-      - nome do cliente no título e ao longo do texto
-      - status "Concluído" (verde) ou "Pendente" (vermelho) ao final de
-        cada um dos 12 itens da lista
-    Espera receber `file_status` (dict) no body com as 12 keys do frontend.
-    """
-    data = body.model_dump()
-    client_name = (data.get("client") or "").strip() or "Cliente"
-    file_status = data.get("file_status") or {}
-    if not isinstance(file_status, dict):
-        raise HTTPException(status_code=400, detail="file_status must be a JSON object")
 
-    tmp_dir = Path(tempfile.mkdtemp(prefix="hsa_"))
-    out_path = tmp_dir / f"{uuid.uuid4().hex}.docx"
-    try:
-        checklist_builder.build_checklist(client_name, file_status, str(out_path))
-    except Exception as e:
-        log.exception("build_checklist failed")
-        raise HTTPException(status_code=500, detail=f"checklist build failed: {e}") from e
-    if not out_path.exists():
-        raise HTTPException(status_code=500, detail="checklist build returned no output")
-
-    return FileResponse(
-        out_path,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=_safe_filename(client_name, "LISTA_DOCUMENTOS", "docx"),
-    )
