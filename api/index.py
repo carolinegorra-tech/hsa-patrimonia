@@ -3,10 +3,11 @@ HSA Patrimon.IA — FastAPI app for Vercel Python runtime.
 
 Vercel routes any path starting with /api/* to this file (via vercel.json).
 Everything else (the frontend) is served as a static asset by Vercel's CDN
-from the /public folder.
+from the /public folder — we do NOT mount static here.
 
-Auth model:
-  • Senha do escritório: HARDCODED como "humberto"
+Auth model (mudou em 2026-05):
+  • Senha do escritório: HARDCODED como "humberto". Bater senha de uma vez
+    no /login destrava o app no navegador do usuário.
   • API key do Anthropic: cada usuário fornece a SUA própria chave após o
     login. A chave nunca é guardada no servidor — vai em cada requisição
     no header X-Anthropic-Api-Key.
@@ -33,13 +34,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-# deck_builder, excel_builder e checklist_builder vivem em api/lib/
+# deck_builder and excel_builder live in api/lib/ — make Python find them
 import sys, os as _os_path
 sys.path.insert(0, _os_path.path.join(_os_path.path.dirname(__file__), "lib"))
 import deck_builder
 import excel_builder
-import checklist_builder
 
+# Senha hardcoded do escritório. Não é segredo criptográfico — é só um gate
+# pra evitar que alguém com a URL random encontre o app. Pode mudar pra
+# qualquer string aqui.
 HSA_PASSWORD      = "humberto"
 CORS_ORIGINS      = os.environ.get("CORS_ORIGINS", "*").split(",")
 ANTHROPIC_MODEL   = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
@@ -68,7 +71,7 @@ EXTRACT_PROMPT = """Extraia todos os bens, direitos e informações familiares d
 
 REGRAS CRÍTICAS:
 1. EXTRAIA ITEM POR ITEM — não use o total do grupo. Crie UM item para CADA bem listado nos PDFs, com sua descrição completa e valor individual em 31/12 do ano da declaração.
-2. Se a soma dos itens individuais não bater exatamente com o "Total Grupo X" do DIRPF, mantenha os valores individuais como foram declarados.
+2. Se a soma dos itens individuais não bater exatamente com o "Total Grupo X" do DIRPF, mantenha os valores individuais como foram declarados (a diferença pode ser ajustes do meio do ano).
 
 3. JURISDIÇÃO — Defina pela LOCALIZAÇÃO REAL do ativo (campo "País" da DIRPF), NÃO pelo documento de origem:
    - jurisdiction = "Brasil"   → ativo no Brasil (campo País = "Brasil" / código 105)
@@ -76,27 +79,82 @@ REGRAS CRÍTICAS:
 
    ⚠ ATENÇÃO MÁXIMA: O DIRPF declara o patrimônio GLOBAL em BRL — INCLUI ativos no exterior. NÃO assuma que tudo que vem do DIRPF é "Brasil". Olhe o campo "País" de CADA item antes de classificar.
 
-4. MERGE DIRPF + DCBE — Quando o MESMO ativo offshore aparece nos DOIS documentos, UNA em UM ÚNICO item:
+   Códigos DIRPF que tipicamente identificam ativos NO EXTERIOR (sempre confirme olhando o campo "País" do item):
+   - Grupo 03 Participações: 31 (Ações no exterior), 39 (Outras participações exterior), 73 (Trust — Lei 14.754/23), 74 (Outras part. empresa exterior), 76 (Entidade controlada no exterior — Lei 14.754)
+   - Grupo 04 Aplicações: 45 (Ativos virtuais / cripto), 47, 79 (Aplicações no exterior)
+   - Grupo 06 Contas: qualquer código com País ≠ Brasil (conta em banco estrangeiro)
+   - Grupo 01 Imóveis: imóvel com País ≠ Brasil
+   - Todos os itens do DCBE → Offshore por definição
+
+4. MERGE DIRPF + DCBE — Quando o MESMO ativo offshore aparece nos DOIS documentos (mesma entidade/empresa/banco, mesmo país), UNA em UM ÚNICO item:
    - jurisdiction: "Offshore"
    - dirpf: valor em R$ (vindo da DIRPF)
    - dcbe: valor em USD (vindo da DCBE)
    - desc: nome da entidade (use a versão mais completa entre os dois documentos)
    - loc: país de localização
 
-5. dirpf = valor em R$ da DIRPF; dcbe = valor em USD da DCBE
-6. Inclua dívidas da Ficha 8 no array "debts"
+   Exemplo: "DOE FAMILY HOLDINGS LTD." aparece na DIRPF código 74 com R$ 17.000.000 E na DCBE Ficha A com US$ 3.420.000 → cria UM único item: {desc:"DOE FAMILY HOLDINGS LTD.", loc:"Ilhas Cayman", jurisdiction:"Offshore", subcategory:"Participação em empresa no exterior (LLC, offshore, BVI, Cayman)", dirpf:17000000, dcbe:3420000, ...}
+
+   NUNCA crie dois itens separados (um só com dirpf, outro só com dcbe) se eles representam a MESMA entidade. Faça match por nome de entidade (banco, empresa, fundo, trust, conta). Variações como "Citibank Private Bank" vs "Citibank International" ou "Doe Holdings Ltd." vs "Doe Holdings Limited" DEVEM ser merged. Se não conseguir fazer o match com certeza razoável, mantenha separado.
+
+5. dirpf = valor em R$ da DIRPF; dcbe = valor em USD da DCBE (item pode ter apenas um dos dois ou ambos)
+6. Inclua dívidas da Ficha 8 no array "debts" (uma entrada por dívida)
 7. Inclua cônjuge da Ficha 2 em "spouse"; dependentes da Ficha 3
 8. JSON 100% completo e fechado. Valores SEMPRE numéricos com centavos exatos.
 
-CLASSIFICAÇÃO OBRIGATÓRIA (3 níveis) — Para cada item, ESCOLHA OBRIGATORIAMENTE a melhor opção:
+CLASSIFICAÇÃO OBRIGATÓRIA (3 níveis) — Para cada item, ESCOLHA OBRIGATORIAMENTE a melhor opção (nunca deixe em branco):
 - name: grupo (nível 1)
 - subcategory: subcategoria do grupo (nível 2)
-- subsubcategory: instrumento/sub-item (nível 3) — só preenche se a subcategoria tiver sub-itens
-- confidence: "high" se a descrição deixa CLARO; "low" se você teve que CHUTAR.
+- subsubcategory: instrumento/sub-item (nível 3) — só preenche se a subcategoria tiver sub-itens listados abaixo
+- confidence: "high" se a descrição deixa CLARO a subcategoria/instrumento; "low" se você teve que CHUTAR a opção mais provável.
 
 GRUPOS válidos para "name":
 "Bens Imóveis" | "Bens Móveis" | "Participações Societárias" | "Aplicações e Investimentos" | "Previdência Privada" | "Créditos e Direitos" | "Contas Bancárias e Saldos" | "Criptoativos" | "Remuneração Variável em Equity"
-"""
+
+SUBCATEGORIAS e SUB-ITENS por grupo:
+
+• Bens Imóveis → subcategory ∈ {"Residenciais","Comerciais e Industriais","Rurais","Outros"}; subsubcategory = ""
+  Dica: apartamento/casa = Residenciais; loja/sala/galpão = Comerciais; fazenda/sítio = Rurais.
+
+• Bens Móveis → subcategory ∈ {"Veículos","Aviação e Náutica","Arte, Joias e Coleções","Outros","NFT / Ativo Digital Não Fungível"}; subsubcategory = ""
+  Dica: carro/moto = Veículos; barco/iate/avião = Aviação e Náutica; obras de arte/joias = Arte, Joias e Coleções.
+
+• Participações Societárias → subcategory ∈ {"Empresa operacional — sócio majoritário / controlador","Empresa operacional — sócio minoritário","Holding patrimonial pura","Holding mista (patrimonial + operacional)","Sociedade em Conta de Participação (SCP)","Participação em startup / empresa anjo","Mercado de Capitais","Participação em empresa no exterior (LLC, offshore, BVI, Cayman)","Trust no exterior (Lei 14.754/23)"}; subsubcategory = ""
+  Dica: ações negociadas em bolsa (Petrobras, Vale, etc) = Mercado de Capitais; holding offshore = Participação em empresa no exterior.
+
+• Aplicações e Investimentos → subcategory ∈ {"Renda Fixa","Fundos","Renda Variável","Alta Liquidez"}; subsubcategory:
+  - Se "Renda Fixa": ∈ {"CDB / RDB","LCI / LCA (isentos de IR para PF)","LIG — Letra Imobiliária Garantida","LC — Letra de Câmbio","CRI / CRA (isentos de IR para PF)","Debêntures (quando ativo)","Debêntures incentivadas (infraestrutura — isentas de IR)","COE — Certificado de Operações Estruturadas","DPGE — Depósito a Prazo com Garantia Especial","Tesouro Selic / Prefixado / IPCA+"}
+  - Se "Fundos": ∈ {"Fundo DI / Renda Fixa","Fundo Multimercado (FIM)","Fundo de Ações (FIA)","Fundo Cambial","FIP — Fundo de Investimento em Participações","FIDC — Fundo de Direitos Creditórios","FII — Fundo de Investimento Imobiliário","ETF (renda fixa ou variável)","Fundo de Investimento Exclusivo (FIE)","Fundo no Exterior / Fundo Offshore"}
+  - Se "Renda Variável": ∈ {"Ações (B3 — custódia em corretora)","BDRs — Brazilian Depositary Receipts","ETF negociado em bolsa","Opções / derivativos","Contratos futuros (dólar, índice, commodities)"}
+  - Se "Alta Liquidez": ∈ {"Poupança","Conta remunerada / CDB liquidez diária","Fundo DI com resgate D+0"}
+
+• Previdência Privada → subcategory ∈ {"PGBL — deduz até 12% da renda bruta","VGBL — IR só sobre rendimentos","FAPI — Fundo de Aposentadoria Programada Individual","Previdência no exterior (401k, pension fund, plano estrangeiro)"}; subsubcategory = ""
+
+• Créditos e Direitos → subcategory ∈ {"Empréstimos Concedidos","Recebíveis e Direitos"}; subsubcategory:
+  - Se "Empréstimos Concedidos": ∈ {"Mútuo / empréstimo a sócio (AFAC ou contrato formal)","Mútuo / empréstimo a familiar","Mútuo / empréstimo a terceiros"}
+  - Se "Recebíveis e Direitos": ∈ {"Conta a receber (venda parcelada)","Direito sobre imóvel (promessa, opção de compra)","Precatório / crédito judicial","Herança a receber / inventário em curso","Indenização a receber (trabalhista, cível)","Depósito caução / garantia de aluguel","Saldo do FGTS (código 40)","Consórcio contemplado ou não (código 95)","Crédito tributário a recuperar","Ativos em inventário (espólio)"}
+
+• Contas Bancárias e Saldos → subcategory ∈ {"Conta corrente (banco nacional)","Conta poupança","Conta remunerada / CDB liquidez diária","Conta no exterior (saldo > US$ 1.000 em 31/12)","Conta em corretora no exterior (IB, Schwab...)","Conta em fintech / carteira digital"}; subsubcategory = ""
+
+• Criptoativos → subcategory ∈ {"Bitcoin (BTC)","Ethereum (ETH)","Stablecoins (USDT, USDC, BRZ)","Altcoins diversas","Tokens de utilidade / governança","NFTs"}; subsubcategory = ""
+
+• Remuneração Variável em Equity → subcategory ∈ {"Opções de Compra","Ações Restritas","Planos de Compra","Phantom / Sintéticos","Startups"}; subsubcategory:
+  - Se "Opções de Compra": ∈ {"Stock Options (não exercida)","Stock Options exercidas","Warrants"}
+  - Se "Ações Restritas": ∈ {"RSU — Restricted Stock Unit (em vesting)","RSU liquidada","RSA — Restricted Stock Award"}
+  - Se "Planos de Compra": ∈ {"ESPP — Employee Stock Purchase Plan","Matching de ações pelo empregador"}
+  - Se "Phantom / Sintéticos": ∈ {"Phantom Shares","SAR — Stock Appreciation Rights","Bônus atrelado a performance (cash-settled)"}
+  - Se "Startups": ∈ {"Opção de compra em startup","Vesting em empresa não listada","SAFE — Simple Agreement for Future Equity","Nota conversível"}
+
+DÍVIDAS (array "debts") — também classificadas com subcategory + subsubcategory + confidence:
+  - "Financiamentos": ∈ {"Financiamento imobiliário (SFH, SFI, alienação fiduciária)","Financiamento de veículo / bem móvel"}
+  - "Empréstimos": ∈ {"Empréstimo bancário (pessoal, consignado)","Empréstimo de pessoa física (sócio, familiar)","Empréstimo de pessoa jurídica (empresa do grupo)"}
+  - "Outros Passivos": ∈ {"Debêntures emitidas","Parcelamento fiscal (REFIS)","Garantia prestada (aval, fiança)","Dívida no exterior"}
+
+CONFIDENCE — Use "low" quando:
+- A descrição é genérica ("Outros bens", "Investimento", "Cotas")
+- Há ambiguidade entre 2+ opções
+- Você teve que inferir o tipo por contexto fraco
+Use "high" quando a descrição menciona claramente o instrumento ("CDB Banco BTG", "Apartamento Pinheiros", "Ações Petrobras", "BTC")."""
 
 EXTRACT_SYSTEM = (
     "Especialista em declarações fiscais brasileiras. "
@@ -108,6 +166,7 @@ EXTRACT_SYSTEM = (
 def health():
     return {
         "status": "ok",
+        # Sempre true agora — usuário fornece a própria chave depois de logar.
         "user_provides_key": True,
         "auth_enabled": True,
     }
@@ -119,6 +178,8 @@ async def extract(
     dcbe: UploadFile | None = File(default=None),
     x_anthropic_api_key: str | None = Header(default=None),
 ):
+    # A chave da Anthropic agora vem do usuário, não do servidor. O frontend
+    # coleta uma vez no login e envia em cada chamada via X-Anthropic-Api-Key.
     if not x_anthropic_api_key or not x_anthropic_api_key.startswith("sk-ant-"):
         raise HTTPException(
             status_code=400,
@@ -258,40 +319,9 @@ def build_excel_endpoint(body: BuildBody):
     )
 
 
-# ── NEW: Document checklist endpoint ──────────────────────────────────────
-@app.post("/api/build/document-checklist", dependencies=[Depends(auth)])
-def build_document_checklist_endpoint(body: BuildBody):
-    """
-    Gera o documento "Lista Inicial de Documentos" da HSA preenchido com:
-      - nome do cliente no título e ao longo do texto
-      - status "Concluído" (verde) ou "Pendente" (vermelho) ao final de
-        cada um dos 12 itens da lista
-    Espera receber `file_status` (dict) no body com as 12 keys do frontend.
-    """
-    data = body.model_dump()
-    client_name = (data.get("client") or "").strip() or "Cliente"
-    file_status = data.get("file_status") or {}
-    if not isinstance(file_status, dict):
-        raise HTTPException(status_code=400, detail="file_status must be a JSON object")
-
-    tmp_dir = Path(tempfile.mkdtemp(prefix="hsa_"))
-    out_path = tmp_dir / f"{uuid.uuid4().hex}.docx"
-    try:
-        checklist_builder.build_checklist(client_name, file_status, str(out_path))
-    except Exception as e:
-        log.exception("build_checklist failed")
-        raise HTTPException(status_code=500, detail=f"checklist build failed: {e}") from e
-    if not out_path.exists():
-        raise HTTPException(status_code=500, detail="checklist build returned no output")
-
-    return FileResponse(
-        out_path,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=_safe_filename(client_name, "LISTA_DOCUMENTOS", "docx"),
-    )
-
-
 # ── isolated single-slide exports ────────────────────────────────────────
+# These build the full 6-slide deck then strip everything except the
+# requested slide (5 = patrimonial orgchart, 6 = family orgchart).
 def _build_single_slide(data: dict, keep_idx: int, kind: str) -> Path:
     from pptx import Presentation
     tmp_dir = Path(tempfile.mkdtemp(prefix="hsa_"))
