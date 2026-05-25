@@ -5,9 +5,14 @@ Vercel routes any path starting with /api/* to this file (via vercel.json).
 Everything else (the frontend) is served as a static asset by Vercel's CDN
 from the /public folder — we do NOT mount static here.
 
+Auth model (mudou em 2026-05):
+  • Senha do escritório: HARDCODED como "humberto". Bater senha de uma vez
+    no /login destrava o app no navegador do usuário.
+  • API key do Anthropic: cada usuário fornece a SUA própria chave após o
+    login. A chave nunca é guardada no servidor — vai em cada requisição
+    no header X-Anthropic-Api-Key.
+
 Env vars (set in the Vercel dashboard):
-  ANTHROPIC_API_KEY   required
-  HSA_PASSWORD        optional shared password
   CORS_ORIGINS        optional, comma-separated; default "*"
   ANTHROPIC_MODEL     optional override
 """
@@ -35,8 +40,10 @@ sys.path.insert(0, _os_path.path.join(_os_path.path.dirname(__file__), "lib"))
 import deck_builder
 import excel_builder
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-HSA_PASSWORD      = os.environ.get("HSA_PASSWORD", "")
+# Senha hardcoded do escritório. Não é segredo criptográfico — é só um gate
+# pra evitar que alguém com a URL random encontre o app. Pode mudar pra
+# qualquer string aqui.
+HSA_PASSWORD      = "humberto"
 CORS_ORIGINS      = os.environ.get("CORS_ORIGINS", "*").split(",")
 ANTHROPIC_MODEL   = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 ANTHROPIC_URL     = "https://api.anthropic.com/v1/messages"
@@ -54,8 +61,7 @@ app.add_middleware(
 
 
 def auth(x_hsa_password: str | None = Header(default=None)) -> None:
-    if not HSA_PASSWORD:
-        return
+    """Gate cada endpoint sensível com a senha do escritório."""
     if x_hsa_password != HSA_PASSWORD:
         raise HTTPException(status_code=401, detail="invalid or missing password")
 
@@ -160,8 +166,9 @@ EXTRACT_SYSTEM = (
 def health():
     return {
         "status": "ok",
-        "anthropic_configured": bool(ANTHROPIC_API_KEY),
-        "auth_enabled": bool(HSA_PASSWORD),
+        # Sempre true agora — usuário fornece a própria chave depois de logar.
+        "user_provides_key": True,
+        "auth_enabled": True,
     }
 
 
@@ -169,9 +176,15 @@ def health():
 async def extract(
     dirpf: UploadFile | None = File(default=None),
     dcbe: UploadFile | None = File(default=None),
+    x_anthropic_api_key: str | None = Header(default=None),
 ):
-    if not ANTHROPIC_API_KEY:
-        raise HTTPException(status_code=500, detail="server not configured: missing ANTHROPIC_API_KEY")
+    # A chave da Anthropic agora vem do usuário, não do servidor. O frontend
+    # coleta uma vez no login e envia em cada chamada via X-Anthropic-Api-Key.
+    if not x_anthropic_api_key or not x_anthropic_api_key.startswith("sk-ant-"):
+        raise HTTPException(
+            status_code=400,
+            detail="Forneça uma API key válida da Anthropic (formato sk-ant-...). Vá em Configurações para atualizar.",
+        )
     if not dirpf and not dcbe:
         raise HTTPException(status_code=400, detail="at least one of dirpf/dcbe must be uploaded")
 
@@ -197,7 +210,7 @@ async def extract(
         "messages": [{"role": "user", "content": content}],
     }
     headers = {
-        "x-api-key": ANTHROPIC_API_KEY,
+        "x-api-key": x_anthropic_api_key,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
