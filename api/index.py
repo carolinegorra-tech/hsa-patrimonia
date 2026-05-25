@@ -362,4 +362,18 @@ def build_orgchart_patrimonial_endpoint(body: BuildBody):
     )
 
 
-
+@app.post("/api/build/orgchart-familiar", dependencies=[Depends(auth)])
+def build_orgchart_familiar_endpoint(body: BuildBody):
+    data = body.model_dump()
+    try:
+        out_path = _build_single_slide(data, keep_idx=4, kind="orgchart-familiar")
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("build_orgchart_familiar failed")
+        raise HTTPException(status_code=500, detail=f"orgchart-familiar failed: {e}") from e
+    return FileResponse(
+        out_path,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=_safe_filename(data.get("client", ""), "ORGANOGRAMA_FAMILIAR", "pptx"),
+    )
