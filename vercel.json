@@ -1,5 +1,8 @@
 {
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index" }
+    { "source": "/api/(.*)", "destination": "/api/index" },
+    { "source": "/", "destination": "/public/index.html" },
+    { "source": "/(.*\\.(jsx|js|css|png|jpg|svg|ico|woff|woff2|ttf))", "destination": "/public/$1" },
+    { "source": "/(.*)", "destination": "/public/$1" }
   ]
 }
