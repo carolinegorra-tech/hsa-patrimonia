@@ -88,14 +88,28 @@ def _grab_styles(template_path):
         'btot_dirpf':  snap('E13'),
         'btot_dcbe':   snap('F48'),
         'stot_label':  snap('B42'),   # section total label
-        'stot_dirpf':  snap('E42'),   # BRL section total (E42 has "R$" format)
-        'stot_dcbe':   snap('F48'),   # USD section total (F48 has "US$" format)
+        'stot_dirpf':  snap('E42'),
         'grand_label': snap('B59'),
-        'grand_value': snap('E59'),       # BRL grand total
-        'grand_value_dcbe': snap('F48'),  # USD grand total (E59 has 'General' so we reuse F48's USD format)
+        'grand_value': snap('E59'),
         'footnote':    snap('B68'),
         'col_widths':  {k: v.width for k, v in ws.column_dimensions.items()},
     }
+
+    # ── derived USD-formatted variants ──────────────────────────────────────
+    # The template has no USD-formatted section-total or grand-value cells
+    # (F42/F59 are 'General'). Build them by cloning the BRL style and swapping
+    # the number_format to the USD pattern (taken from btot_dcbe = F48).
+    USD_FMT = styles['btot_dcbe']['number_format']  # '"US$ "#,##0.00'
+    def _usd_variant(base):
+        return {
+            'font':          copy(base['font']),
+            'fill':          copy(base['fill']),
+            'border':        copy(base['border']),
+            'alignment':     copy(base['alignment']),
+            'number_format': USD_FMT,
+        }
+    styles['stot_dcbe']       = _usd_variant(styles['stot_dirpf'])
+    styles['grand_value_usd'] = _usd_variant(styles['grand_value'])
     return styles
 
 
@@ -169,18 +183,18 @@ def build_excel(data, output_path):
               styles={'D':'hdr_pais','E':'hdr_dirpf','F':'hdr_dcbe','G':'hdr_coment'})
 
     r = 8
-    block_total_rows_br  = []
-    block_total_rows_off = []
+    # Per-column block-total rows. Brasil writes only E; Offshore writes both E and F.
+    block_total_rows_br_e  = []
+    block_total_rows_off_e = []
+    block_total_rows_off_f = []
 
-    def emit_block(block_name, items, total_store, *, has_dirpf=True, has_dcbe=False):
+    def emit_block(block_name, items, write_dirpf, write_dcbe,
+                   store_e, store_f):
         """
-        Emit a block of items + its total row.
-
-        has_dirpf: this block has BRL values (DIRPF column E). Always True today.
-        has_dcbe:  this block has USD values (DCBE column F). True for offshore only.
-
-        For offshore items, BOTH columns are written per item — DIRPF (BRL) AND
-        DCBE (USD) — because clients declare the same offshore asset in both.
+        write_dirpf: emit DIRPF (col E) item values + block total in E
+        write_dcbe : emit DCBE  (col F) item values + block total in F
+        Brasil   blocks pass (True, False, store_e, None)
+        Offshore blocks pass (True, True,  store_e, store_f)
         """
         nonlocal r
         write_row(r, b=block_name, styles={k:'block' for k in 'BCDEFG'})
@@ -193,32 +207,35 @@ def build_excel(data, output_path):
                       b=item_counter[0],
                       c=it['desc'],
                       d=it['loc'],
-                      e=it['dirpf'] if has_dirpf else None,
-                      f=it['dcbe']  if has_dcbe  else None,
+                      e=(it['dirpf'] if write_dirpf else None),
+                      f=(it['dcbe']  if write_dcbe  else None),
                       g=it['comments'],
                       styles={'B':'item_num','C':'item_desc','D':'item_pais',
                               'E':'item_dirpf','F':'item_dcbe','G':'item_coment'})
             r += 1
             wrote += 1
         if wrote == 0:
-            write_row(r, d=('Brasil' if not has_dcbe else 'Exterior'),
+            write_row(r, d=('Brasil' if write_dirpf and not write_dcbe else 'Exterior'),
                       styles={'B':'item_num','C':'item_desc','D':'item_pais',
                               'E':'item_dirpf','F':'item_dcbe','G':'item_coment'})
             r += 1
             wrote = 1
         first, last = first_item, r - 1
-        # Total row: format E with btot_dirpf (BRL) if has_dirpf, F with btot_dcbe (USD) if has_dcbe
+        # Block-total row — apply value style to whichever columns receive a sum
         write_row(r,
                   b=f'Total {block_name}:',
                   styles={'B':'btot_label','C':'btot_label','D':'btot_label',
-                          'E':('btot_dirpf' if has_dirpf else 'btot_label'),
-                          'F':('btot_dcbe'  if has_dcbe  else 'btot_label'),
+                          'E':('btot_dirpf' if write_dirpf else 'btot_label'),
+                          'F':('btot_dcbe'  if write_dcbe  else 'btot_label'),
                           'G':'btot_label'})
-        if has_dirpf:
+        if write_dirpf:
             ws[f'E{r}'] = f'=SUM(E{first}:E{last})'
-        if has_dcbe:
+            if store_e is not None:
+                store_e.append(r)
+        if write_dcbe:
             ws[f'F{r}'] = f'=SUM(F{first}:F{last})'
-        total_store.append(r)
+            if store_f is not None:
+                store_f.append(r)
         r += 1
 
     # ── BRASIL ──────────────────────────────────────────────────────────────
@@ -227,13 +244,16 @@ def build_excel(data, output_path):
     write_row(r, b='Bens e Direitos', styles={k:'subsection' for k in 'BCDEFG'})
     ws.merge_cells(f'B{r}:G{r}'); r += 1
     for bn, _ in BR_BLOCKS:
-        emit_block(bn, br_items[bn], block_total_rows_br, has_dirpf=True, has_dcbe=False)
+        # Brasil: only DIRPF column has values + totals
+        emit_block(bn, br_items[bn],
+                   write_dirpf=True, write_dcbe=False,
+                   store_e=block_total_rows_br_e, store_f=None)
 
     write_row(r, b='Total Ativos Brasil:',
               styles={'B':'stot_label','C':'stot_label','D':'stot_label',
                       'E':'stot_dirpf','F':'stot_label','G':'stot_label'})
     ws.merge_cells(f'B{r}:D{r}')
-    ws[f'E{r}'] = '=' + '+'.join(f'E{x}' for x in block_total_rows_br)
+    ws[f'E{r}'] = '=' + '+'.join(f'E{x}' for x in block_total_rows_br_e)
     brasil_total_row = r
     r += 2
 
@@ -241,23 +261,29 @@ def build_excel(data, output_path):
     write_row(r, b='OFFSHORE', styles={k:'section' for k in 'BCDEFG'})
     ws.merge_cells(f'B{r}:G{r}'); r += 1
     for bn, _ in OFF_BLOCKS:
-        emit_block(bn, off_items[bn], block_total_rows_off, has_dirpf=True, has_dcbe=True)
+        # Offshore: items carry BOTH DIRPF (BRL, col E) and DCBE (USD, col F).
+        # PTAX is informational only — values are stored as declared, never converted here.
+        emit_block(bn, off_items[bn],
+                   write_dirpf=True, write_dcbe=True,
+                   store_e=block_total_rows_off_e, store_f=block_total_rows_off_f)
 
     write_row(r, b='Total Ativos Offshore:',
               styles={'B':'stot_label','C':'stot_label','D':'stot_label',
                       'E':'stot_dirpf','F':'stot_dcbe','G':'stot_label'})
     ws.merge_cells(f'B{r}:D{r}')
-    ws[f'E{r}'] = '=' + '+'.join(f'E{x}' for x in block_total_rows_off)
-    ws[f'F{r}'] = '=' + '+'.join(f'F{x}' for x in block_total_rows_off)
+    if block_total_rows_off_e:
+        ws[f'E{r}'] = '=' + '+'.join(f'E{x}' for x in block_total_rows_off_e)
+    if block_total_rows_off_f:
+        ws[f'F{r}'] = '=' + '+'.join(f'F{x}' for x in block_total_rows_off_f)
     offshore_total_row = r
     r += 2
 
     # ── TOTAL ATIVOS ────────────────────────────────────────────────────────
-    # Column E (BRL) = Brasil total + Offshore DIRPF total (offshore is also declared on DIRPF in BRL)
-    # Column F (USD) = Offshore DCBE total (only offshore has DCBE)
+    # Col E (BRL): combined DIRPF — Brasil + offshore items' declared DIRPF value.
+    # Col F (USD): DCBE total — offshore only.
     write_row(r, b='TOTAL ATIVOS',
               styles={'B':'grand_label','C':'grand_label','D':'grand_label',
-                      'E':'grand_value','F':'grand_value_dcbe','G':'grand_label'})
+                      'E':'grand_value','F':'grand_value_usd','G':'grand_label'})
     ws.merge_cells(f'B{r}:D{r}')
     ws[f'E{r}'] = f'=E{brasil_total_row}+E{offshore_total_row}'
     ws[f'F{r}'] = f'=F{offshore_total_row}'
