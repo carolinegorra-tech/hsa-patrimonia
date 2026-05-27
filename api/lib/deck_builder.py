@@ -19952,8 +19952,20 @@ def aggregate(data):
                 off_countries_by_cat[g['name']] = sorted(country_set)
     off_sorted, off_outros_components = _top6_with_outros(off_agg)
 
-    total_br  = sum(v for _, v in br_sorted)
-    total_off = sum(v for _, v in off_sorted)
+    # Offshore — também somar DIRPF (BRL declarado) por categoria, paralelo ao
+    # off_sorted (que é DCBE/USD). Permite que slide 3 mostre Exterior em BRL
+    # quando value_source='dirpf' ou 'both'. Itens offshore sem dirpf declarado
+    # contribuem 0 (o que é correto: cliente preencheu DCBE mas não DIRPF).
+    off_dirpf_agg = {}
+    for g in groups:
+        if g.get('jurisdiction') == 'Offshore':
+            tot = sum((it.get('dirpf') or 0) for it in g['items'])
+            off_dirpf_agg[g['name']] = off_dirpf_agg.get(g['name'], 0) + tot
+    off_dirpf_sorted, off_dirpf_outros_components = _top6_with_outros(off_dirpf_agg)
+
+    total_br        = sum(v for _, v in br_sorted)
+    total_off       = sum(v for _, v in off_sorted)
+    total_off_dirpf = sum(v for _, v in off_dirpf_sorted)
 
     return {
         'client':    data.get('client', '—'),
@@ -19964,6 +19976,12 @@ def aggregate(data):
         'off_sorted':off_sorted,
         'total_br':  total_br,
         'total_off': total_off,
+        # Offshore valores em BRL (DIRPF) — paralelo ao off_sorted/total_off
+        # que estão em USD (DCBE). Slide 3 escolhe um ou outro baseado em
+        # data['value_source']. Veja docstring de build_deck.
+        'off_dirpf_sorted':           off_dirpf_sorted,
+        'total_off_dirpf':            total_off_dirpf,
+        'off_dirpf_outros_components': off_dirpf_outros_components,
         # When a slide-2 callout aggregates multiple categories into an
         # "Outros" bucket, the hyperlinks shown under that callout should
         # pool the strategies of the bundled categories. This dict maps
@@ -21774,7 +21792,8 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, sorted_items, total,
                             indice_p, indice_s, strategy_slides,
                             outros_components=None,
                             jurisdiction='Brasil',
-                            selected_strategies=None):
+                            selected_strategies=None,
+                            currency='BRL'):
     """Draw the redesigned slide 2 (or 3): donut centered + up to 6 callouts
     around it with category name, value, percentage, and 0–2 strategy
     hyperlinks each. Two big bottom buttons link to the Patrimonial /
@@ -21916,7 +21935,7 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, sorted_items, total,
     r = p.add_run(); r.text = "TOTAL"
     r.font.name = "Gotham SSm Bold"; r.font.size = Pt(7); r.font.color.rgb = GRAY_MED; r.font.bold = True
     p2 = tot_tf.add_paragraph(); p2.alignment = PP_ALIGN.CENTER
-    r2 = p2.add_run(); r2.text = _brl_short(total_br)
+    r2 = p2.add_run(); r2.text = _money_short(total_br, currency)
     r2.font.name = "Gotham SSm Bold"; r2.font.size = Pt(13); r2.font.color.rgb = NAVY; r2.font.bold = True
 
     # ── CALLOUT SLOTS (6 side slots — 3 left, 3 right, no slots above the
@@ -22257,7 +22276,7 @@ def _draw_redesigned_slide2(sl, prs_w, prs_h, sorted_items, total,
         rv_label = pv.add_run(); rv_label.text = "Valor: "
         rv_label.font.name = "Gotham SSm Bold"; rv_label.font.size = Pt(10)
         rv_label.font.color.rgb = card_text_color; rv_label.font.bold = True
-        rv = pv.add_run(); rv.text = f"{_brl_short(val)} "
+        rv = pv.add_run(); rv.text = f"{_money_short(val, currency)} "
         rv.font.name = "Gotham SSm Bold"; rv.font.size = Pt(10)
         rv.font.color.rgb = card_text_color; rv.font.bold = True
         rp = pv.add_run(); rp.text = f"({pct:.1f}%)"
@@ -22408,6 +22427,19 @@ def _brl_short(v):
     if v >= 1_000_000:     return f"R$ {v/1e6:.1f}M"
     if v >= 1_000:         return f"R$ {v/1e3:.0f}K"
     return f"R$ {v:,.0f}".replace(",", ".")
+
+
+def _usd_short(v):
+    """Compact USD: US$ 5.0M / US$ 612K / US$ 0"""
+    if v >= 1_000_000_000: return f"US$ {v/1e9:.1f}B"
+    if v >= 1_000_000:     return f"US$ {v/1e6:.1f}M"
+    if v >= 1_000:         return f"US$ {v/1e3:.0f}K"
+    return f"US$ {v:,.0f}"
+
+
+def _money_short(v, currency='BRL'):
+    """Choose BRL or USD short format based on currency token."""
+    return _usd_short(v) if currency == 'USD' else _brl_short(v)
 
 
 def _shape_internal_hyperlink(slide, shape, target_slide):
@@ -23133,16 +23165,117 @@ def build_deck(data, output_path):
     )
 
     # ── Repurpose slide 3 as Composição — EXTERIOR ──────────────────────────
+    # value_source (Commit 3) controla quais valores alimentam o slide 3:
+    #   'dcbe' (padrão) — usa DCBE (USD declarado, soma de items.dcbe).
+    #                     Comportamento de produção; corrige o prefixo R$ que
+    #                     era incorreto antes (agora aparece US$).
+    #   'dirpf'         — usa DIRPF (BRL declarado, soma de items.dirpf).
+    #                     Quando o cliente declarou o exterior na DIRPF, é o
+    #                     valor em R$ que ele mesmo informou.
+    #   'both'          — slide 3 em BRL (DIRPF) + um slide 3b adicional em
+    #                     USD (DCBE) inserido logo depois.
+    # Default = 'dcbe' preserva comportamento atual em produção.
+    value_source = (data.get('value_source') or 'dcbe').lower().strip()
+    if value_source not in ('dirpf', 'dcbe', 'both'):
+        value_source = 'dcbe'
+
+    OFF_OUTROS_COMPONENTS     = agg.get('off_outros_components', {}) or {}
+    OFF_DIRPF_OUTROS_COMP     = agg.get('off_dirpf_outros_components', {}) or {}
+    off_dirpf                 = agg.get('off_dirpf_sorted', []) or []
+    TOTAL_OFF_DIRPF           = agg.get('total_off_dirpf', 0) or 0
+
+    if value_source == 'dirpf' or value_source == 'both':
+        slide3_items    = off_dirpf
+        slide3_total    = TOTAL_OFF_DIRPF
+        slide3_outros   = OFF_DIRPF_OUTROS_COMP
+        slide3_currency = 'BRL'
+    else:  # 'dcbe'
+        slide3_items    = off
+        slide3_total    = TOTAL_OFF
+        slide3_outros   = OFF_OUTROS_COMPONENTS
+        slide3_currency = 'USD'
+
     s3_new = prs.slides[2]
-    OFF_OUTROS_COMPONENTS = agg.get('off_outros_components', {}) or {}
     _draw_redesigned_slide2(
         s3_new, prs.slide_width, prs.slide_height,
-        off, TOTAL_OFF,
+        slide3_items, slide3_total,
         indice_p, indice_s, strategy_slides,
-        OFF_OUTROS_COMPONENTS,
+        slide3_outros,
         jurisdiction='Exterior',
         selected_strategies=selected_strategies,
+        currency=slide3_currency,
     )
+
+    # ── Slide 3b ('both' mode only): cópia do slide 3 com dados DCBE/USD ────
+    # Quando o advogado pediu "DIRPF + DCBE", slide 3 vai em BRL e este 3b
+    # adicional mostra o mesmo exterior em USD. Cria-se um slide novo
+    # (não-clone), copia-se o chrome HSA + Text 7 do slide 3 source,
+    # depois roda-se o _draw_redesigned_slide2 nele com USD. Chart é gerado
+    # do zero (não compartilha part com slide 3 → modificações independentes).
+    if value_source == 'both':
+        from copy import deepcopy as _dc
+        from pptx.oxml.ns import qn as _qn
+        import re as _re3b
+
+        s3b = _append_blank_slide_layout(prs)
+        src_part_3b = s3_new.part
+        dst_part_3b = s3b.part
+        spTree_3b   = s3b.shapes._spTree
+        extLst_3b   = spTree_3b.find(_qn('p:extLst'))
+
+        _DATA_RE_3B = _re3b.compile(r'^(Rectangle|TextBox)\s*(\d+)$')
+        # Clonar tudo do slide 3 source EXCETO charts (cada slide tem o seu
+        # próprio chart, criado pelo _draw_redesigned_slide2) e shapes de
+        # dados no range 454-500 (esses são regenerados na nova chamada).
+        # Text 7 entra na clonagem porque ribbon() precisa dele pra escrever
+        # o título "COMPOSIÇÃO PATRIMONIAL — EXTERIOR".
+        for sh in s3_new.shapes:
+            if sh.has_chart:
+                continue
+            m = _DATA_RE_3B.match(sh.name or '')
+            if m and 454 <= int(m.group(2)) <= 500:
+                continue
+            new_el = _dc(sh.element)
+            # Re-link image refs (a:blip r:embed) pra o novo part
+            for blip in new_el.iter(_qn('a:blip')):
+                embed_id = blip.get(_qn('r:embed'))
+                if embed_id and embed_id in src_part_3b.rels:
+                    src_rel = src_part_3b.rels[embed_id]
+                    new_rId = dst_part_3b.relate_to(src_rel.target_part, src_rel.reltype)
+                    blip.set(_qn('r:embed'), new_rId)
+            # Re-link hyperlink refs
+            for hl in new_el.iter(_qn('a:hlinkClick')):
+                rid = hl.get(_qn('r:id'))
+                if rid and rid in src_part_3b.rels:
+                    src_rel = src_part_3b.rels[rid]
+                    new_rId = dst_part_3b.relate_to(src_rel.target_part, src_rel.reltype)
+                    hl.set(_qn('r:id'), new_rId)
+            if extLst_3b is not None:
+                extLst_3b.addprevious(new_el)
+            else:
+                spTree_3b.append(new_el)
+
+        # Desenhar slide 3b com offshore DCBE/USD
+        _draw_redesigned_slide2(
+            s3b, prs.slide_width, prs.slide_height,
+            off, TOTAL_OFF,
+            indice_p, indice_s, strategy_slides,
+            OFF_OUTROS_COMPONENTS,
+            jurisdiction='Exterior',
+            selected_strategies=selected_strategies,
+            currency='USD',
+        )
+        # Nota: a reordenação do slide 3b (mover de fim → posição 4) acontece
+        # DEPOIS da remoção do slide-4-antigo lá embaixo. Se reordenássemos
+        # aqui agora, o slide 3b cairia no índice 3 do sldIdLst e seria
+        # confundido com o slide 4 antigo pela lógica de remoção.
+
+    # Capturar o ID do slide 3b (se foi criado em modo 'both') ANTES da
+    # remoção do slide 4 antigo, pra conseguir reordená-lo depois.
+    s3b_id_to_reorder = None
+    if value_source == 'both':
+        ids_now = list(prs.slides._sldIdLst)
+        s3b_id_to_reorder = ids_now[-1]   # slide 3b foi o último appended
 
     # ── Remove slide 4 (was PARTICIPAÇÕES SOCIETÁRIAS — twin bar-chart
     # breakdown of BR vs Offshore for Participações). Redundant now that
@@ -23150,8 +23283,14 @@ def build_deck(data, output_path):
     # via the composition donuts. ──────────────────────────────────────────
     sldIdLst = prs.slides._sldIdLst
     ids = list(sldIdLst)
+    # Em modo 'both', o slide 3b está no fim — o slide 4 antigo está no
+    # índice 3 ainda (porque o 3b foi appended, não inserted). Lógica de
+    # remoção segue igual.
     if len(ids) > 3:
-        s4_id_elem = ids[3]
+        # Em modo 'both', cuidado: ids[3] DEVE ser o slide 4 antigo (que
+        # virou o "antigo organograma patrimonial" → vamos remover). NÃO
+        # pode ser o slide 3b, que está no fim da lista.
+        s4_id_elem = ids[3] if ids[3] is not s3b_id_to_reorder else ids[4]
         s4_rId = s4_id_elem.get(
             '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
         try:
@@ -23168,6 +23307,17 @@ def build_deck(data, output_path):
                 del prs.part.package._parts[s4_part.partname]
             except (AttributeError, KeyError):
                 pass
+
+    # ── Reordenar slide 3b (modo 'both') agora que slide 4 antigo já foi
+    # removido: move da posição final pra logo após slide 3 (índice 3 do
+    # sldIdLst, que é a "posição 4" visível do deck).
+    if s3b_id_to_reorder is not None:
+        sldIdLst_now = prs.slides._sldIdLst
+        try:
+            sldIdLst_now.remove(s3b_id_to_reorder)
+            sldIdLst_now.insert(3, s3b_id_to_reorder)
+        except ValueError:
+            pass   # 3b já não está mais lá — segue sem reordenar
 
     # Re-number TextBox 13 (slide number) on every remaining slide
     for slide_num, sl in enumerate(prs.slides, start=1):
