@@ -86,6 +86,70 @@ const hydrateItemsFromStore = (groups, client) => {
   }));
 };
 
+// ── Per-client value-source preference (Commit 3) ────────────────────────
+// Lawyer's pick of which values feed PPT slide 3 (Exterior):
+//   "dcbe" (default) — slide 3 = Offshore DCBE em USD  (comportamento atual)
+//   "dirpf"          — slide 3 = Offshore DIRPF em BRL (valor declarado em R$)
+//   "both"           — slide 3 em BRL (DIRPF) + slide 3b em USD (DCBE)
+// Persisted per client so the choice survives reloads.
+const valueSourceKey = (client) => `valueSource:${normalizeKey(client)}`;
+const loadValueSource = (client) => {
+  try {
+    const v = localStorage.getItem(valueSourceKey(client));
+    return (v === "dirpf" || v === "dcbe" || v === "both") ? v : "dcbe";
+  } catch(e) { return "dcbe"; }
+};
+const saveValueSource = (client, v) => {
+  try { localStorage.setItem(valueSourceKey(client), v); } catch(e){}
+};
+
+// Three-option radio for the value source. Same component is used in two
+// places (step "done" + step "strategies").
+function ValueSourceSelector({value, onChange}) {
+  const opts = [
+    {v:"dcbe",  label:"DCBE",          desc:"Slide 3 em US$ (offshore via DCBE) — comportamento padrão"},
+    {v:"dirpf", label:"DIRPF",         desc:"Slide 3 em R$ — offshore via valor declarado na DIRPF"},
+    {v:"both",  label:"DIRPF + DCBE",  desc:"Slide 3 em R$ + slide 3b adicional em US$ (slides separados)"},
+  ];
+  return (
+    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"14px 16px"}}>
+      <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",marginBottom:10,gap:10,flexWrap:"wrap"}}>
+        <span style={{color:C.muted,fontSize:10,fontWeight:700,letterSpacing:"0.15em"}}>FONTE DE VALORES · SLIDES 2 E 3 DO PPT</span>
+        <span style={{color:C.dim,fontSize:10,fontStyle:"italic"}}>preferência salva por cliente</span>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+        {opts.map(o => {
+          const sel = value === o.v;
+          return (
+            <button key={o.v} onClick={()=>onChange(o.v)}
+              style={{
+                background: sel ? "rgba(191,148,71,.08)" : "transparent",
+                border: `1.5px solid ${sel ? C.gold : C.border}`,
+                borderRadius:8,padding:"10px 12px",
+                cursor:"pointer",textAlign:"left",
+                fontFamily:"'Nunito Sans',sans-serif",
+                transition:"all .15s",
+              }}>
+              <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:4}}>
+                <span style={{
+                  width:14,height:14,borderRadius:"50%",
+                  border:`1.5px solid ${sel ? C.gold : C.dim}`,
+                  background: sel ? C.gold : "transparent",
+                  display:"inline-block",position:"relative",flexShrink:0,
+                }}>
+                  {sel && <span style={{position:"absolute",top:3,left:3,right:3,bottom:3,background:"#fff",borderRadius:"50%"}}/>}
+                </span>
+                <span style={{color: sel ? C.gold : C.text,fontSize:12,fontWeight:700}}>{o.label}</span>
+              </div>
+              <p style={{color:C.muted,fontSize:10,lineHeight:1.45,paddingLeft:21}}>{o.desc}</p>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 
 // ── Taxonomia completa: Grupo → Subcategoria → [Sub-itens] ───────────────
 // 99 sub-itens em 10 grupos. Sub-itens vazios [] significam que o nível 3
@@ -661,6 +725,11 @@ function App(){
   useEffect(()=>{
     if (data && step === "verify") saveClientState(data);
   }, [data, step]);
+  // Restore the per-client value_source preference whenever the client name
+  // changes (fresh extraction or restored session). Falls back to "dirpf".
+  useEffect(()=>{
+    if (data?.client) setValueSource(loadValueSource(data.client));
+  }, [data?.client]);
   const [loading,setLoading]=useState(false);
   const [loadMsg,setLoadMsg]=useState("");
   const [error,setError]=useState("");
@@ -681,6 +750,14 @@ function App(){
   // deck usa o catálogo completo (comportamento legado). Set vazio ou
   // populado = advogado escolheu, só as marcadas vão pro PPT.
   const [selectedStrategies, setSelectedStrategies] = useState(null);
+  // Value-source selector (Commit 3): controls slides 2/3 of the PPT.
+  // Initialized to "dirpf" on mount; rehydrated from localStorage when the
+  // client is loaded (see useEffect on `data?.client` below).
+  const [valueSource, setValueSource] = useState("dcbe");
+  const handleValueSourceChange = (v) => {
+    setValueSource(v);
+    if (data?.client) saveValueSource(data.client, v);
+  };
   const dirpfRef=useRef();
   const dcbeRef=useRef();
 
@@ -848,9 +925,14 @@ function App(){
         // Demais kinds (Excel, PPT) usam o `data` já verificado.
         // Inclui `selected_strategies` quando o advogado preencheu o
         // formulário de planejamento (só relevante pro deck completo).
-        payload = selectedStrategies !== null
-          ? {...data, selected_strategies: Array.from(selectedStrategies)}
-          : data;
+        // Inclui `value_source` (Commit 3) para o deck builder saber se
+        // slide 3 vai em BRL (dirpf), USD (dcbe), ou ambos com slide 3b (both).
+        payload = {
+          ...data,
+          value_source: valueSource,
+          ...(selectedStrategies !== null
+              ? {selected_strategies: Array.from(selectedStrategies)} : {}),
+        };
       }
       const r = await fetch(KIND_TO_URL[kind], {
         method: "POST",
@@ -1917,6 +1999,11 @@ function App(){
           Baixe a lista de ativos em Excel, ou avance para selecionar as estratégias que entrarão na apresentação.
         </p>
 
+        {/* Value source selector (Commit 3) — chooses what feeds slides 2/3 of the PPT */}
+        <div style={{marginBottom:14,textAlign:"left"}}>
+          <ValueSourceSelector value={valueSource} onChange={handleValueSourceChange}/>
+        </div>
+
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:24}}>
           {/* Card 1: Excel — download direto */}
           {(() => {
@@ -2124,6 +2211,11 @@ function App(){
               "rgba(156,122,0,.06)",
               SUCESSORIO_STRATEGIES,
             )}
+          </div>
+
+          {/* Value source selector (Commit 3) */}
+          <div style={{marginBottom:16}}>
+            <ValueSourceSelector value={valueSource} onChange={handleValueSourceChange}/>
           </div>
 
           {/* Footer actions */}
