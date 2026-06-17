@@ -39,13 +39,14 @@ import sys, os as _os_path
 sys.path.insert(0, _os_path.path.join(_os_path.path.dirname(__file__), "lib"))
 import deck_builder
 import excel_builder
+import checklist_builder
 
 # Senha hardcoded do escritório. Não é segredo criptográfico — é só um gate
 # pra evitar que alguém com a URL random encontre o app. Pode mudar pra
 # qualquer string aqui.
 HSA_PASSWORD      = "humberto"
 CORS_ORIGINS      = os.environ.get("CORS_ORIGINS", "*").split(",")
-ANTHROPIC_MODEL   = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+ANTHROPIC_MODEL   = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 ANTHROPIC_URL     = "https://api.anthropic.com/v1/messages"
 
 logging.basicConfig(level=logging.INFO)
@@ -166,7 +167,6 @@ EXTRACT_SYSTEM = (
 def health():
     return {
         "status": "ok",
-        # Sempre true agora — usuário fornece a própria chave depois de logar.
         "user_provides_key": True,
         "auth_enabled": True,
     }
@@ -178,8 +178,6 @@ async def extract(
     dcbe: UploadFile | None = File(default=None),
     x_anthropic_api_key: str | None = Header(default=None),
 ):
-    # A chave da Anthropic agora vem do usuário, não do servidor. O frontend
-    # coleta uma vez no login e envia em cada chamada via X-Anthropic-Api-Key.
     if not x_anthropic_api_key or not x_anthropic_api_key.startswith("sk-ant-"):
         raise HTTPException(
             status_code=400,
@@ -319,9 +317,32 @@ def build_excel_endpoint(body: BuildBody):
     )
 
 
+@app.post("/api/build/document-checklist", dependencies=[Depends(auth)])
+def build_document_checklist_endpoint(body: BuildBody):
+    data = body.model_dump()
+    client_name = (data.get("client") or "").strip() or "Cliente"
+    file_status = data.get("file_status") or {}
+    if not isinstance(file_status, dict):
+        raise HTTPException(status_code=400, detail="file_status must be a JSON object")
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="hsa_"))
+    out_path = tmp_dir / f"{uuid.uuid4().hex}.docx"
+    try:
+        checklist_builder.build_checklist(client_name, file_status, str(out_path))
+    except Exception as e:
+        log.exception("build_checklist failed")
+        raise HTTPException(status_code=500, detail=f"checklist build failed: {e}") from e
+    if not out_path.exists():
+        raise HTTPException(status_code=500, detail="checklist build returned no output")
+
+    return FileResponse(
+        out_path,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=_safe_filename(client_name, "LISTA_DOCUMENTOS", "docx"),
+    )
+
+
 # ── isolated single-slide exports ────────────────────────────────────────
-# These build the full 6-slide deck then strip everything except the
-# requested slide (5 = patrimonial orgchart, 6 = family orgchart).
 def _build_single_slide(data: dict, keep_idx: int, kind: str) -> Path:
     from pptx import Presentation
     tmp_dir = Path(tempfile.mkdtemp(prefix="hsa_"))
